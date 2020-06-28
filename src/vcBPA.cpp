@@ -97,39 +97,20 @@ struct vcBPAGrid
   }
 };
 
-struct vcBPAOctNode
-{
-  udDouble3 center;
-  udDouble3 extents;
-  bool visited;
-
-  static vcBPAOctNode create(udDouble3 center, udDouble3 extents)
-  {
-    vcBPAOctNode node = {};
-    node.center = center;
-    node.extents = extents;
-    node.visited = false;
-    return node;
-  }
-};
-
 struct vcBPAManifold
 {
-  udChunkedArray<vcBPAGrid> grids;
-  udChunkedArray<vcBPAOctNode> nodes;
-
   udWorkerPool *pPool;
+  vdkContext* pContext;
 
   double gridSize;
   double ballRadius;
-  vdkContext *pContext;
+  udDouble3 startAABBCenter;
+  udDouble4 boundingBoxExtents;  
 };
 
 void vcBPA_Init(vcBPAManifold **ppManifold, vdkContext *pContext)
 {
   vcBPAManifold *pManifold = udAllocType(vcBPAManifold, 1, udAF_Zero);
-  pManifold->grids.Init(1 << 10);
-  pManifold->nodes.Init(1 << 13);
   udWorkerPool_Create(&pManifold->pPool, (uint8_t)udGetHardwareThreadCount(), "vcBPAPool");
   pManifold->pContext = pContext;
   *ppManifold = pManifold;
@@ -143,11 +124,6 @@ void vcBPA_Deinit(vcBPAManifold **ppManifold)
   vcBPAManifold *pManifold = *ppManifold;
   *ppManifold = nullptr;
   udWorkerPool_Destroy(&pManifold->pPool);
-  pManifold->nodes.Deinit();
-  for (size_t i = 0; i < pManifold->grids.length; ++i)
-    pManifold->grids[i].Deinit();
-
-  pManifold->grids.Deinit();
   udFree(pManifold);
 }
 
@@ -891,8 +867,11 @@ uint32_t vcBPA_GridGeneratorThread(void *pDataPtr)
   vcBPAGrid *pGrid = nullptr;
   int i = 0;
 
-  vdkPointCloudHeader header;
+  vdkPointCloudHeader header = {};
   vdkPointCloud_GetHeader(pData->pNewModel, &header);
+  udDouble4x4 storedMatrix = udDouble4x4::create(header.storedMatrix);
+  pData->pManifold->startAABBCenter = (storedMatrix * udDouble4::create(header.pivot[0], header.pivot[1], header.pivot[2], 1.0)).toVector3();
+  pData->pManifold->boundingBoxExtents = storedMatrix * udDouble4::create(header.boundingBoxExtents[0], header.boundingBoxExtents[1], header.boundingBoxExtents[2], 1.0);
 
   while (vcBPA_GetGrid(pData->pManifold, pData->pNewModel, &header.attributes, &pGrid) && pData->running)
   {
@@ -941,19 +920,8 @@ vdkError vcBPA_ConvertOpen(vdkConvertCustomItem *pConvertInput, uint32_t everyNt
   pData->pManifold->ballRadius = pData->ballRadius;
   pData->pManifold->gridSize = pData->gridSize;
 
-  vdkPointCloudHeader header = {};
-  vdkPointCloud_GetHeader(pData->pNewModel, &header);
-  udDouble4x4 storedMatrix = udDouble4x4::create(header.storedMatrix);
-  udDouble3 startAABBCenter = (storedMatrix * udDouble4::create(header.pivot[0], header.pivot[1], header.pivot[2], 1.0)).toVector3();
-
   udSafeDeque_Create(&pData->pQueueItems, 32);
   udSafeDeque_Create(&pData->pConvertItemData, 128);
-
-  udDouble4 boundingBoxExtents = udDouble4::create(header.boundingBoxExtents[0], header.boundingBoxExtents[1], header.boundingBoxExtents[2], 1.0);
-  boundingBoxExtents = storedMatrix * boundingBoxExtents;
-  double nextPow2 = (double)udPowerOfTwoAbove((int64_t)udMaxElement(boundingBoxExtents));
-
-  pData->pManifold->nodes.PushBack(vcBPAOctNode::create(startAABBCenter, udDouble3::create(nextPow2)));
 
   udThread_Create(&pData->pThread, vcBPA_GridGeneratorThread, pData, udTCF_None, "BPAGridGeneratorThread");
   while (pData->running && udSafeDeque_PopFront(pData->pConvertItemData, &pData->activeItem) != udR_Success)
