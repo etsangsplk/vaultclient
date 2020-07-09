@@ -13,6 +13,7 @@
 #include "udJSON.h"
 #include "udPlatformUtil.h"
 #include "udStringUtil.h"
+#include <fstream>
 
 #if VC_HASCONVERT
 
@@ -22,7 +23,7 @@
 #if LOW_MEMORY
 // for data structure
 typedef uint8_t TINDEX; // max 255, needs bigger than BLOCK_SIZE
-static const uint32_t BLOCK_SIZE = 128; // 1 << 7
+static const uint32_t BLOCK_SIZE = 32; // 1 << 7
 static const uint32_t HASH_ARRAY_LEN = 512; // (111 111 111) + 1, 3 bits for x/y/z
 static const uint32_t HASH_ARRAY_MASK = 7; // 111
 #define GET_HASHINDEX(x, y, z) (((uint32_t)(x) & HASH_ARRAY_MASK) << 6 | ((uint32_t)(y) & HASH_ARRAY_MASK) << 3 | ((uint32_t)(z) & HASH_ARRAY_MASK) )
@@ -85,11 +86,16 @@ struct DataBlock
         pCurrTemp = pNextTemp;
         pNextTemp = pCurrTemp->pNext;
       }
+      udFree(pCurrTemp->pNext->pBlockData);
+      pCurrTemp->pNext->index = 0;
 
       udFree(pCurrTemp->pNext);
       pCurrTemp = this;
       pNextTemp = this->pNext;
     }
+
+    udFree(pBlockData);
+    index = 0;
   }
 
   TData *AddData()
@@ -118,6 +124,18 @@ struct vcBPAHashMap
   {
     TData data; // first block
     TKey hashKey; // hash value
+
+    void Init()
+    {
+      data.Init();
+      hashKey = 0;
+    }
+
+    void Deinit()
+    {
+      data.Deinit();
+      hashKey = 0;
+    }
   };
 
   struct HashNodeBlock
@@ -126,13 +144,28 @@ struct vcBPAHashMap
     HashNodeBlock *pNext;
     TINDEX index; // avaliable index
 
-    int blocklen;
-
     void Init()
     {
       pBlockData = udAllocType(HashNode*, BLOCK_SIZE, udAF_Zero);
       index = 0;
       pNext = nullptr;
+    }
+
+    void DeinitBlock(HashNodeBlock *pNode)
+    {
+      if (pNode->index == 0)
+        return;
+
+      for (TINDEX i = 0; i < pNode->index; i++)
+      {
+        if (pNode->pBlockData[i])
+        {
+          pNode->pBlockData[i]->Deinit(); // [ HashNode *]->Deinit();
+          udFree(pNode->pBlockData[i]); //udFree(HashNode *)
+        }
+      }
+      udFree(pNode->pBlockData); //udFree([HashNode*])
+      pNode->index = 0;
     }
 
     void Deinit()
@@ -147,18 +180,16 @@ struct vcBPAHashMap
           pNexTemp = pCurrTemp->pNext;
         }
 
-        for (TINDEX i = 0; i < pCurrTemp->pNext->index; i++)
-        {
-          if (pCurrTemp->pNext->pBlockData[i])
-          {
-            pCurrTemp->pNext->pBlockData[i]->hashKey = 0;
-            udFree(pCurrTemp->pNext->pBlockData[i]);
-          }
-        }          
+        DeinitBlock(pCurrTemp->pNext);  // Deinit(HashNodeBlock*)
         udFree(pCurrTemp->pNext);
+
         pCurrTemp = this;
         pNexTemp = this->pNext;
       }
+
+      DeinitBlock(this);
+      udFree(pNext);
+      index = 0;
     }
 
     HashNode *AddHashNode(TKey hashKey)
@@ -172,14 +203,14 @@ struct vcBPAHashMap
         pFind->pNext = udAllocType(HashNodeBlock, 1, udAF_Zero);
         pFind = pFind->pNext;
         pFind->Init();
-
-        blocklen++;
       }
 
-      pFind->pBlockData[pFind->index] = udAllocType(HashNode, 1, udAF_Zero);
-      pFind->pBlockData[pFind->index]->hashKey = hashKey;
+      HashNode* pNode = udAllocType(HashNode, 1, udAF_Zero);
+      pNode->Init();
+      pNode->hashKey = hashKey;
+      pFind->pBlockData[pFind->index++] = pNode;
 
-      return pFind->pBlockData[pFind->index++];
+      return pNode;
     }
 
     HashNode *FindHashNode(TKey hashKey)
@@ -209,7 +240,7 @@ struct vcBPAHashMap
 
   TData *AddNode(uint32_t x, uint32_t y, uint32_t z)
   {
-    TINDEX hashIndex = GET_HASHINDEX(x, y, z);
+    uint32_t hashIndex = GET_HASHINDEX(x, y, z);
     TKey hashKey = GET_HASHKEY(x, y, z);
 
     HashNodeBlock **pFirst = &pArray[hashIndex];
@@ -230,9 +261,11 @@ struct vcBPAHashMap
 
   void Deinit()
   {
+    printf("%s Deinit()\n", typeid(vcBPAHashMap).name());
+
     if (!pArray) return;
 
-    for (TINDEX i = 0; i < HASH_ARRAY_LEN; i++)
+    for (uint32_t i = 0; i < HASH_ARRAY_LEN; i++)
     {
       if (pArray[i])
       {
@@ -241,11 +274,12 @@ struct vcBPAHashMap
       }
     }
     udFree(pArray);
+    pArray = 0;
   }
 
   TData *FindData(uint32_t x, uint32_t y, uint32_t z)
   {
-    TINDEX hashIndex = GET_HASHINDEX(x, y, z);
+    uint32_t hashIndex = GET_HASHINDEX(x, y, z);
     TKey hashKey = GET_HASHKEY(x, y, z);
     HashNodeBlock **pFirst = &pArray[hashIndex];
     if (*pFirst == nullptr)
@@ -261,21 +295,21 @@ struct vcBPAHashMap
 };
 
 
-template<typename TStackArray>
-TStackArray *FindAvailableStackArray(TStackArray *pBottomArray, int32_t arrayLen)
+template<typename TEdgeArray, typename TEdge>
+TEdge *FindAvailableStackArray(TEdgeArray &pBottomArray)
 {
-  TStackArray *pFind = pBottomArray;
+  TEdgeArray *pFind = &pBottomArray;
   while (pFind->pTop != nullptr)
     pFind = pFind->pTop;
 
-  if (pFind->index == arrayLen)
+  if (pFind->index == TEdgeArray::ElementCount)
   {
-    pFind->pTop = udAllocType(TStackArray, 1, udAF_Zero);
+    pFind->pTop = udAllocType(TEdgeArray, 1, udAF_Zero);
     pFind->pTop->pBottom = pFind;
     pFind = pFind->pTop;
   }
 
-  return pFind;
+  return &pFind->edges[pFind->index++];
 }
 
 enum vcBPARunningStatus
@@ -283,7 +317,7 @@ enum vcBPARunningStatus
   vcBPARS_Active,
   vcBPARS_Failed,
   vcBPARS_Success,
-  vcBPARS_Cancel,
+  vcBPARS_Close,
   vcBPARS_End
 };
 
@@ -360,6 +394,13 @@ struct vcBPAEdgeArray
   vcBPAEdgeArray *pTop;
   vcBPAEdgeArray *pBottom;
   int16_t index;
+
+  void Init()
+  {
+    pTop = 0;
+    pBottom = 0;
+    index = 0;
+  }
 };
 
 struct vcBPAFrozenEdge
@@ -377,6 +418,13 @@ struct vcBPAFrozenEdgeArray
   vcBPAFrozenEdgeArray *pTop;
   vcBPAFrozenEdgeArray *pBottom;
   uint16_t index;
+
+  void Init()
+  {
+    pTop = 0;
+    pBottom = 0;
+    index = 0;
+  }
 };
 
 // old model
@@ -384,8 +432,8 @@ struct vcBPAGridHashNode
 {
   vcBPAHashMap<HASHKEY, vcBPAVoxel> voxelHashMap; // linked hash array, never change after being created unitil .
   vcBPAHashMap<HASHKEY, vcBPATriangleArray> triangleHashMap; // linked hash array will be used to compare data
-  vcBPAEdgeArray *pActiveEdgesStack;
-  vcBPAFrozenEdgeArray *pFrozenEdgesStack;
+  vcBPAEdgeArray activeEdgesStack;
+  vcBPAFrozenEdgeArray frozenEdgesStack;
   int32_t frozenEdgeCount;
 
   udDouble3 zero;
@@ -401,41 +449,50 @@ struct vcBPAGridHashNode
   {
     voxelHashMap.Init();
     triangleHashMap.Init();
-    pActiveEdgesStack = udAllocType(vcBPAEdgeArray, 1, udAF_Zero);
-    pFrozenEdgesStack = udAllocType(vcBPAFrozenEdgeArray, 1, udAF_Zero);
+    activeEdgesStack.Init();
+    frozenEdgesStack.Init();
   }
 
-  static void CleanBPAData(vcBPAGridHashNode *pGrid)
+  void CleanBPAData()
   {
+    printf("vcBPAGridHashNode CleanBPAData()\n");
+
     // release all active edges(should be anyone left)
-    RemoveAllEdge<vcBPAEdgeArray>(pGrid->pActiveEdgesStack);
-    udFree(pGrid->pActiveEdgesStack);
+    RemoveAllEdge<vcBPAEdgeArray>(activeEdgesStack);  
 
     // release all voxels
-    pGrid->voxelHashMap.Deinit();
+    voxelHashMap.Deinit();
   }
 
-  void Deinit()
+  void CleanCompareData()
   {
-    // release all left frozen edges
-    if (pFrozenEdgesStack != nullptr)
-    {
-      RemoveAllEdge<vcBPAFrozenEdgeArray>(pFrozenEdgesStack);
-      udFree(pFrozenEdgesStack);
-    }
+    printf("vcBPAGridHashNode CleanCompareData()\n");
 
     // release all triangles
     triangleHashMap.Deinit();
 
-    vdkPointBufferF64_Destroy(&pBuffer);
+    if (pBuffer != nullptr)
+    {
+      vdkPointBufferF64_Destroy(&pBuffer);
+      pBuffer = nullptr;
+    }
+
+  }
+
+  void Deinit()
+  {
+    printf("vcBPAGridHashNode Deinit()\n");
+    // release all left frozen edges
+    RemoveAllEdge<vcBPAFrozenEdgeArray>(frozenEdgesStack);
+    CleanBPAData();
+    CleanCompareData();
   }
 
   static bool FindPointInActiveEdges(vcBPAGridHashNode *pGrid, udDouble3 *p0)
   {
-    vcBPAEdgeArray *pFind = pGrid->pActiveEdgesStack;
+    vcBPAEdgeArray *pFind = &pGrid->activeEdgesStack;
     while (pFind->pTop != nullptr)
       pFind = pFind->pTop;
-
     do
     {
       for (int32_t i = pFind->index - 1; i >= 0; i--)
@@ -450,9 +507,11 @@ struct vcBPAGridHashNode
     return false;
   }
 
-  static bool FindEdgeInActiveEdges(vcBPAGridHashNode *pGrid, udDouble3 *p0, udDouble3 *p1)
+  template<typename T_ARRAY, typename TPoint>
+  static bool FindEdge(T_ARRAY &pArray, TPoint p0, TPoint p1)
   {
-    vcBPAEdgeArray *pFind = pGrid->pActiveEdgesStack;
+    T_ARRAY *pFind = &pArray;
+
     while (pFind->pTop != nullptr)
       pFind = pFind->pTop;
 
@@ -460,9 +519,8 @@ struct vcBPAGridHashNode
     {
       for (int32_t i = pFind->index - 1; i >= 0; i--)
       {
-        vcBPAEdge &edge = pFind->edges[i];
-        if ((edge.vertices[0] == p0 && edge.vertices[1] == p1) || (edge.vertices[1] == p0 && edge.vertices[0] == p1))
-          return true;
+        if (pFind->edges[i].vertices[0] == p0 && pFind->edges[i].vertices[1] == p1)
+          return true;          
       }
       pFind = pFind->pBottom;
     } while (pFind != nullptr);
@@ -471,9 +529,9 @@ struct vcBPAGridHashNode
   }
 
   template<typename T_ARRAY, typename TEdge>
-  static bool PopEdge(T_ARRAY * pArray, TEdge &edge)
+  static bool PopEdge(T_ARRAY &pArray, TEdge &edge)
   {
-    T_ARRAY *pFind = pArray;
+    T_ARRAY *pFind = &pArray;
     // empty
     if (pFind->index == 0)
       return false;
@@ -482,28 +540,56 @@ struct vcBPAGridHashNode
       pFind = pFind->pTop;
 
     edge = pFind->edges[--pFind->index];
-    if (pFind->index == 0 && pFind != pArray)
+    if (pFind->index == 0)
     {
-      pFind = pFind->pBottom;
-      udFree(pFind->pTop);
+      if (pFind != &pArray)
+      {
+        pFind = pFind->pBottom;
+        memset(pFind->pTop->edges, 0, sizeof(TEdge) * T_ARRAY::ElementCount);
+        pFind->pTop->index = 0;
+        udFree(pFind->pTop);
+      }
+      else
+      {
+        memset(pFind->edges, 0, sizeof(TEdge) * T_ARRAY::ElementCount);
+      }      
     }
 
     return true;
   }
 
   template<typename T_ARRAY, typename TEdge, typename TPoint>
-  static void RemoveEdge(T_ARRAY *pBottomArray, TPoint p0, TPoint p1)
+  static void RemoveEdge(T_ARRAY &pBottomArray, TPoint p0, TPoint p1)
   {    
     // empty
-    if (pBottomArray->index == 0)
+    if (pBottomArray.index == 2)
+    {
+      pBottomArray.index = 0;
       return;
+    }      
 
-    TEdge top;
-    PopEdge<T_ARRAY, TEdge>(pBottomArray, top);
-    if ((top.vertices[0] == p0 && top.vertices[1] == p1) || (top.vertices[1] == p0 && top.vertices[0] == p1))
-      return;
+    int32_t removeNum = 2;
+    TEdge top1;
+    PopEdge<T_ARRAY, TEdge>(pBottomArray, top1);
 
-    T_ARRAY *pFind = pBottomArray;
+    TEdge top2;
+    PopEdge<T_ARRAY, TEdge>(pBottomArray, top2);
+
+    if ((top2.vertices[0] == p0 && top2.vertices[1] == p1) || (top2.vertices[1] == p0 && top2.vertices[0] == p1))
+    {
+      removeNum--;
+    }
+
+    if ((top1.vertices[0] == p0 && top1.vertices[1] == p1) || (top1.vertices[1] == p0 && top1.vertices[0] == p1))
+    {
+      top1 = top2;
+      removeNum--;
+    }
+
+    if (removeNum == 0)
+      return;      
+
+    T_ARRAY *pFind = &pBottomArray;
     while (pFind->pTop != nullptr)
       pFind = pFind->pTop;
 
@@ -515,11 +601,15 @@ struct vcBPAGridHashNode
         TEdge &edge = pFind->edges[i];
         if ((edge.vertices[0] == p0 && edge.vertices[1] == p1) || (edge.vertices[1] == p0 && edge.vertices[0] == p1))
         {
-          edge.vertices[0] = top.vertices[0];
-          edge.vertices[1] = top.vertices[1];
-          edge.triangleZ = top.triangleZ;
-          edge.ballCenter = top.ballCenter;
-          return;
+          edge = top1;
+          if (--removeNum == 0)
+            return;
+        }
+        if ((edge.vertices[0] == p1 && edge.vertices[1] == p0) || (edge.vertices[1] == p1 && edge.vertices[0] == p0))
+        {
+          edge = top2;
+          if (--removeNum == 0)
+            return;
         }
       }
       pFind = pFind->pBottom;
@@ -527,20 +617,25 @@ struct vcBPAGridHashNode
   }
 
    template<typename T_ARRAY>
-  static void RemoveAllEdge(T_ARRAY *pArray)
+  static void RemoveAllEdge(T_ARRAY &pArray)
   {
-    T_ARRAY *pFind = pArray;
+    printf("%s RemoveAllEdge()\n", typeid(T_ARRAY).name());
+    if (pArray.index == 0)
+      return;
+
+    T_ARRAY *pFind = &pArray;
     if (pFind->index == 0) return;
 
     while (pFind->pTop != nullptr)
       pFind = pFind->pTop;
 
-    while (pFind != pArray)
+    while (pFind != &pArray)
     {
       pFind = pFind->pBottom;
       udFree(pFind->pTop);
     }
-    pArray->index = 0;
+
+    pArray.index = 0;
   }
  
   static bool IfTriangleDuplicated(vcBPAGridHashNode *pGrid, uint32_t x, uint32_t y, uint32_t z, const udDouble3 &p0, const udDouble3 &p1, const udDouble3 &p2)
@@ -585,10 +680,24 @@ struct vcVoxelGridHashNode
   {
     voxelHashMap.Init();
   }
+  void CleanCompareData()
+  {
+    printf("vcVoxelGridHashNode CleanCompareData()\n");
+
+    voxelHashMap.Deinit();
+
+    if (pBuffer)
+    {
+      vdkPointBufferF64_Destroy(&pBuffer);
+      pBuffer = nullptr;
+    }
+    
+  }
   void Deinit()
   {
-    voxelHashMap.Deinit();
-    vdkPointBufferF64_Destroy(&pBuffer);
+    printf("vcVoxelGridHashNode Deinit()\n");
+
+    CleanCompareData();
   }
 };
 
@@ -612,13 +721,14 @@ struct vcBPAManifold
 
   void Deinit()
   {
+    printf("vcBPAManifold Deinit()\n");
+
     oldModelMap.Deinit();
     newModelMap.Deinit();
 
     pContext = nullptr;
     udWorkerPool_Destroy(&pPool);
   }
-
 };
 
 void vcBPA_QueryPoints(vdkContext* pContext, vdkPointCloud *pModel, const double centrePoint[3], const double halfSize[3], vdkPointBufferF64* pBuffer)
@@ -645,10 +755,8 @@ void vcBPA_AddPoints(uint32_t j, double x, double y, double z, const udDouble3 &
   //add a point into the voxel
   vcBPAVoxel *pVoxel = voxelHashMap->FindData(vx, vy, vz);
   if (pVoxel == nullptr)
-  {
-    pVoxel = voxelHashMap->AddNode(vx, vy, vz);
-    pVoxel->Init();
-  }
+    pVoxel = voxelHashMap->AddNode(vx, vy, vz);    
+
   ++pVoxel->pointNum;
 
   vcBPAVertex *point = pVoxel->data.AddData();
@@ -685,7 +793,7 @@ struct SortPoint
   double d;
 };
 
-size_t vcBPA_GetNearbyPoints(vcBPAVertex **&pp, vcBPAGridHashNode* pGrid, vcBPAVertex* pVertex, uint32_t x, uint32_t y, uint32_t z, double ballDiameterSq)
+size_t vcBPA_GetNearbyPoints(vcBPAVertex **&pp, vcBPAGridHashNode* pGrid, vcBPAVertex* pVertex, uint32_t x, uint32_t y, uint32_t z, double ballDiameterSq, bool chechUsed = true)
 {
   udChunkedArray<SortPoint> nearbyPoints;
   nearbyPoints.Init(32);
@@ -711,7 +819,7 @@ size_t vcBPA_GetNearbyPoints(vcBPAVertex **&pp, vcBPAGridHashNode* pGrid, vcBPAV
         {
           for (int i = 0; i <= pPointArray->index; i++)
           {
-            if (pPointArray->pBlockData[i].used)
+            if (chechUsed && pPointArray->pBlockData[i].used)
               continue;
             if (pVertex && pVertex == &pPointArray->pBlockData[i] )
               continue;
@@ -740,77 +848,78 @@ size_t vcBPA_GetNearbyPoints(vcBPAVertex **&pp, vcBPAGridHashNode* pGrid, vcBPAV
   }
 
   size_t nearbyNum = nearbyPoints.length;
-  pp = udAllocType(vcBPAVertex *, nearbyNum, udAF_Zero);
-  for (size_t i = 0; i < nearbyPoints.length; ++i)
-    pp[i] = nearbyPoints[i].p;
+  if (nearbyNum > 0)
+  {
+    pp = udAllocType(vcBPAVertex *, nearbyNum, udAF_Zero);
+    for (size_t i = 0; i < nearbyPoints.length; ++i)
+      pp[i] = nearbyPoints[i].p;
+  }  
   nearbyPoints.Deinit();
 
   return nearbyNum;
 }
 
-void vcBPA_InsertEdge(vcBPAGridHashNode *pGrid, const udDouble3 &ballCenter, const udDouble3 &triangleZ, udDouble3 *e1, udDouble3 *e2, uint32_t x, uint32_t y, uint32_t z, double voxelSize, uint32_t gridXSize, uint32_t gridYSize, uint32_t gridZSize)
+bool vcBPA_InsertEdge(vcBPAGridHashNode *pGrid, const udDouble3 &ballCenter, const udDouble3 &triangleZ, udDouble3 *e1, udDouble3 *e2, uint32_t x, uint32_t y, uint32_t z, double voxelSize, uint32_t gridXSize, uint32_t gridYSize, uint32_t gridZSize)
 {
   // Mark edge as frozen if any point lies outside the grid
   udDouble3 d1 = *e1 - pGrid->zero;
   udDouble3 d2 = *e2 - pGrid->zero;
-  bool d1Frozen = false;
-  bool d2Frozen = false;
+  int d1Frozen = 0;
+  int d2Frozen = false;
   if (x < gridXSize - 1)
   {
     if (d1.x >= pGrid->end.x - voxelSize)
-      d1Frozen = true;
+      ++d1Frozen;
     if (d2.x >= pGrid->end.x - voxelSize)
-      d2Frozen = true;
+      ++d2Frozen;
   }
 
   if (y < gridYSize - 1)
   {
     if (d1.y >= pGrid->end.y - voxelSize)
-      d1Frozen = true;
+      ++d1Frozen;
     if (d2.y >= pGrid->end.y - voxelSize)
-      d2Frozen = true;
+      ++d2Frozen;
   }
 
   if (z < gridZSize - 1)
   {
     if (d1.z >= pGrid->end.z - voxelSize)
-      d1Frozen = true;
+      ++d1Frozen;
     if (d2.z >= pGrid->end.z - voxelSize)
-      d2Frozen = true;
+      ++d2Frozen;
   }
 
   // frozen edge
-  if (d1Frozen && d2Frozen)
+  if (d1Frozen == 3 && d2Frozen == 3)
   {
-    vcBPAFrozenEdgeArray *pFind = FindAvailableStackArray<vcBPAFrozenEdgeArray>(pGrid->pFrozenEdgesStack, vcBPAFrozenEdgeArray::ElementCount);
+    vcBPAFrozenEdge *pEdge = FindAvailableStackArray<vcBPAFrozenEdgeArray, vcBPAFrozenEdge>(pGrid->frozenEdgesStack);
     ++ pGrid->frozenEdgeCount;
-    vcBPAFrozenEdge &edge = pFind->edges[pFind->index++];
-    edge.vertices[0] = *e1;
-    edge.vertices[1] = *e2;
-    edge.ballCenter = ballCenter;
-    edge.triangleZ = triangleZ;
-  }
-  else
-  {
-    vcBPAEdgeArray *pFind = FindAvailableStackArray<vcBPAEdgeArray>(pGrid->pActiveEdgesStack, vcBPAEdgeArray::ElementCount);
-    vcBPAEdge &edge = pFind->edges[pFind->index++];
-    edge.vertices[0] = e1;
-    edge.vertices[1] = e2;
-    edge.ballCenter = ballCenter;
-    edge.triangleZ = triangleZ;
+
+    pEdge->vertices[0] = *e1;
+    pEdge->vertices[1] = *e2;
+    pEdge->ballCenter = ballCenter;
+    pEdge->triangleZ = triangleZ;
+    return false;
   }
 
+  vcBPAEdge *pEdge = FindAvailableStackArray<vcBPAEdgeArray, vcBPAEdge>(pGrid->activeEdgesStack);
+  pEdge->vertices[0] = e1;
+  pEdge->vertices[1] = e2;
+  pEdge->ballCenter = ballCenter;
+  pEdge->triangleZ = triangleZ;
+  return true;
 }
 
-vcBPATriangle *vcBPA_CreateTriangle(vcBPAGridHashNode *pGrid, const udDouble3 &ballCenter, const udDouble3 &p0, const udDouble3 &p1, const udDouble3 &p2, double voxelSize)
+vcBPATriangle *vcBPA_CreateTriangle(vcBPAGridHashNode *pGrid, uint32_t vx, uint32_t vy, uint32_t vz, const udDouble3 &ballCenter, const udDouble3 &p0, const udDouble3 &p1, const udDouble3 &p2)
 {
-  udDouble3 d = (ballCenter - pGrid->zero)/ voxelSize;
-  vcBPATriangleArray *pArray = pGrid->triangleHashMap.FindData((uint32_t)d.x, (uint32_t)d.y, (uint32_t)d.z);
+#ifdef _DEBUG
+  double _time = udGetEpochMilliSecsUTCf();
+#endif // _DEBUG
+
+  vcBPATriangleArray *pArray = pGrid->triangleHashMap.FindData(vx, vy, vz);
   if (pArray == nullptr)
-  {
-    pArray = pGrid->triangleHashMap.AddNode((uint32_t)d.x, (uint32_t)d.y, (uint32_t)d.z);
-    pArray->Init();
-  }
+    pArray = pGrid->triangleHashMap.AddNode(vx, vy, vz);
     
   vcBPATriangle *t = pArray->data.AddData();
   t->vertices[0] = p0;
@@ -820,7 +929,12 @@ vcBPATriangle *vcBPA_CreateTriangle(vcBPAGridHashNode *pGrid, const udDouble3 &b
 
   ++pGrid->triangleSize;
 
-  printf("vcBPA_CreateTriangle %d\n", pGrid->triangleSize);
+#ifdef _DEBUG
+  _time = udGetEpochMilliSecsUTCf() - _time;
+  if (pGrid->triangleSize % 1000 == 0)
+    printf("triangleSize %d %f\n", pGrid->triangleSize, _time);
+#endif // _DEBUG
+  
   return t;
 }
 
@@ -830,7 +944,7 @@ bool vcBPA_FindSeedTriangle(vcBPAGridHashNode *pGrid, vcBPAVertex *pVertex, uint
   double ballRadiusSq = ballRadius * ballRadius;
   vcBPAVertex **nearbyPoints = nullptr;
   size_t nearbyNum = vcBPA_GetNearbyPoints(nearbyPoints, pGrid, pVertex, vx, vy, vz, ballRadiusSq*4);
-  printf("grid(%d,%d,%d) voxel(%d,%d,%d) nearby %d\n", gridX, gridY, gridZ, vx, vy, vz, nearbyNum);
+  //printf("grid(%d,%d,%d) voxel(%d,%d,%d) nearby %d\n", gridX, gridY, gridZ, vx, vy, vz, nearbyNum);
   if(nearbyNum == 0)
     return false;
 
@@ -896,12 +1010,26 @@ bool vcBPA_FindSeedTriangle(vcBPAGridHashNode *pGrid, vcBPAVertex *pVertex, uint
         vcBPA_InsertEdge(pGrid, ballCenter, *n0, n1, n2, gridX, gridY, gridZ, voxelSize, gridXSize, gridYSize, gridZSize);
         vcBPA_InsertEdge(pGrid, ballCenter, *n2, n0, n1, gridX, gridY, gridZ, voxelSize, gridXSize, gridYSize, gridZSize);
 
-        vcBPA_CreateTriangle(pGrid, ballCenter, *n0, *n1, p2->position, voxelSize);
+        udDouble3 vTriangle = (ballCenter - pGrid->zero) / voxelSize;
+        int32_t vTrianglex = udMax((int32_t)vTriangle.x, 0);
+        vTrianglex = udMin(vTrianglex, BPA_LEVEL_LEN);
+
+        int32_t vTriangley = udMax((int32_t)vTriangle.y, 0);
+        vTriangley = udMin(vTriangley, BPA_LEVEL_LEN);
+
+        int32_t vTrianglez = udMax((int32_t)vTriangle.z, 0);
+        vTrianglez = udMin(vTrianglez, BPA_LEVEL_LEN);
+        
+        vcBPA_CreateTriangle(pGrid, (uint32_t)vTrianglex, (uint32_t)vTriangley, (uint32_t)vTrianglez, ballCenter, *n0, *n1, p2->position);
+        //printf("vcBPA_FindSeedTriangle %d voxel(%d,%d,%d)\n", pGrid->triangleSize, vx, vy, vz);
+
+        udFree(nearbyPoints);
         return true;
       }
     }
   }
 
+  udFree(nearbyPoints);
   return false;
 
 }
@@ -910,9 +1038,10 @@ struct vcBPATriangleSeek
 {
   udDouble3 *vertices[3];
   udDouble3 ballCenter;
+  vcBPAVertex *pCandidate;
 };
 
-bool vcBPA_BallPivot(vcBPAGridHashNode *pGrid, double ballRadius, vcBPAEdge &edge, udDouble3 *&pVertex, udDouble3 &ballCenter, double voxelSize)
+bool vcBPA_BallPivot(vcBPAGridHashNode *pGrid, double ballRadius, vcBPAEdge &edge, vcBPAVertex *&pVertex, udDouble3 &ballCenter, double voxelSize)
 {
   // find all points within 2r
   vcBPAVertex temp = {};
@@ -938,6 +1067,7 @@ bool vcBPA_BallPivot(vcBPAGridHashNode *pGrid, double ballRadius, vcBPAEdge &edg
     t.vertices[0] = edge.vertices[0];
     t.vertices[1] = &nearbyPoints[i]->position;
     t.vertices[2] = edge.vertices[1];
+    t.pCandidate = nearbyPoints[i];
 
     // Check that the triangle normal is consistent with the vertex normals - i.e. pointing outward
     udDouble3 triangleNormal = vcBPA_GetTriangleNormal(*t.vertices[0], *t.vertices[1], *t.vertices[2]);
@@ -982,6 +1112,7 @@ bool vcBPA_BallPivot(vcBPAGridHashNode *pGrid, double ballRadius, vcBPAEdge &edg
   if (triangles.length == 0)
   {
     triangles.Deinit();
+    udFree(nearbyPoints);
     return false;
   }
 
@@ -1042,9 +1173,10 @@ bool vcBPA_BallPivot(vcBPAGridHashNode *pGrid, double ballRadius, vcBPAEdge &edg
     }
   }
 
-  pVertex = triangle.vertices[1];
+  pVertex = triangle.pCandidate;
   ballCenter = triangle.ballCenter;
   triangles.Deinit();
+  udFree(nearbyPoints);
 
   return true;
 }
@@ -1060,17 +1192,7 @@ struct vcBPAConvertItemData
   uint32_t gridy;
   uint32_t gridz;
   vdkPointCloud *pOldModel;
-  uint32_t leftPoint;
-};
-
-struct vcBPAConvertProcessInfo
-{
-  uint32_t voxelX;
-  uint32_t voxelY;
-  uint32_t voxelZ;
-  vcBPAVertex **pArray;
-  uint32_t currIndex;
-  uint32_t arrayLen;
+  int32_t leftPoint;
 };
 
 struct vcBPAData
@@ -1096,17 +1218,56 @@ struct vcBPAConvertItem
   double ballRadius;
 
   udSafeDeque<vcBPAConvertItemData> *pConvertItemData;
-  vcBPAConvertItemData *pActiveItem;
-  vcBPAConvertProcessInfo processInfo;
+  vcBPAConvertItemData activeItem;
+  udUInt3 v;
+  vcBPAVertex **ppVertex;
+  uint32_t pointIndex;
+  uint32_t arrayLength;
+
   udThread *pThread;
   udInterlockedInt32 running;
+
+  void CleanReadData()
+  {
+    v = udUInt3::zero();
+
+    if (ppVertex)
+      udFree(ppVertex);
+   
+    pointIndex = 0;
+    arrayLength = 0;
+    if (activeItem.pNewModelGrid)
+    {
+      activeItem.pNewModelGrid->CleanCompareData();
+      activeItem.pNewModelGrid = nullptr;
+    }
+
+    if (activeItem.pOldModelGrid)
+    {
+      activeItem.pOldModelGrid->CleanCompareData();
+      activeItem.pOldModelGrid = nullptr;
+    }
+  }
+
+  void Deinit()
+  {   
+    udThread_Join(pThread);
+    udThread_Destroy(&pThread);
+
+    CleanReadData();
+    udSafeDeque_Destroy(&pConvertItemData);
+    if (pManifold != nullptr)
+    {
+      pManifold->Deinit();
+      udFree(pManifold);
+    }
+    activeItem = {};
+  }
 };
 
-void vcBPA_DoGrid(void* pDataPtr, vcBPAGridHashNode *pGrid, double ballRadius, double voxelSize, uint32_t gridX, uint32_t gridY, uint32_t gridZ, uint32_t gridXSize, uint32_t gridYSize, uint32_t gridZSize)
+void vcBPA_DoGrid(vcBPAGridHashNode *pGrid, double ballRadius, double voxelSize, uint32_t gridX, uint32_t gridY, uint32_t gridZ, uint32_t gridXSize, uint32_t gridYSize, uint32_t gridZSize)
 {
-  printf("vcBPA_DoGrid\n");
-
-  vcBPAConvertItem *pData = (vcBPAConvertItem *)pDataPtr;
+  printf("vcBPA_DoGrid grid(%d,%d,%d) gridSize(%d,%d,%d)\n", gridX, gridY, gridZ, gridXSize, gridYSize, gridZSize);
 
   vcBPAHashMap<HASHKEY, vcBPAVoxel>::HashNodeBlock *pCurrBlock = nullptr;
   uint32_t currBlockIndex = 0;
@@ -1119,46 +1280,74 @@ void vcBPA_DoGrid(void* pDataPtr, vcBPAGridHashNode *pGrid, double ballRadius, d
   vcBPAVertex **pUnuseArray = nullptr;
 
   vcBPAEdge edge = {};
-  udDouble3 *pVertex = nullptr;
+  vcBPAVertex *pVertex = nullptr;
   udDouble3 ballCenter = {};
 
-  while (pData->running.Get() == vcBPARS_Active)
+  while (true)
   {
-    if (vcBPAGridHashNode::PopEdge<vcBPAEdgeArray, vcBPAEdge>(pGrid->pActiveEdgesStack, edge))
+    if (vcBPAGridHashNode::PopEdge<vcBPAEdgeArray, vcBPAEdge>(pGrid->activeEdgesStack, edge))
     {
       pVertex = nullptr;
       ballCenter = {};
 
-      double _time = udGetEpochMilliSecsUTCf() ;
-
       if (vcBPA_BallPivot(pGrid, ballRadius, edge, pVertex, ballCenter, voxelSize))
       {
-        if (vcBPAGridHashNode::FindPointInActiveEdges(pGrid, pVertex))
+        if (!pVertex->used || vcBPAGridHashNode::FindPointInActiveEdges(pGrid, &pVertex->position))
         {
-          if (vcBPAGridHashNode::IfTriangleDuplicated(pGrid, gridX, gridY, gridZ, *edge.vertices[0], *pVertex, *edge.vertices[1]))
+          udDouble3 vTriangle = (ballCenter - pGrid->zero) / voxelSize;
+          int32_t vTrianglex = udMax((int32_t)vTriangle.x, 0);
+          vTrianglex = udMin(vTrianglex, BPA_LEVEL_LEN);
+
+          int32_t vTriangley = udMax((int32_t)vTriangle.y, 0);
+          vTriangley = udMin(vTriangley, BPA_LEVEL_LEN);
+
+          int32_t vTrianglez = udMax((int32_t)vTriangle.z, 0);
+          vTrianglez = udMin(vTrianglez, BPA_LEVEL_LEN);
+
+          if (pVertex->used && vcBPAGridHashNode::IfTriangleDuplicated(pGrid, (uint32_t)vTrianglex, (uint32_t)vTriangley, (uint32_t)vTrianglez, *edge.vertices[0], pVertex->position, *edge.vertices[1]))
             continue;
 
-          vcBPA_CreateTriangle(pGrid, ballCenter, *edge.vertices[0], *pVertex, *edge.vertices[1], voxelSize);
-          if (!vcBPAGridHashNode::FindEdgeInActiveEdges(pGrid, pVertex, edge.vertices[1]))
-            vcBPA_InsertEdge(pGrid, ballCenter, *edge.vertices[0], pVertex, edge.vertices[1], gridX, gridY, gridZ, voxelSize, gridXSize, gridYSize, gridZSize);
-          else
-            vcBPAGridHashNode::RemoveEdge<vcBPAEdgeArray, vcBPAEdge, udDouble3*>(pGrid->pActiveEdgesStack, pVertex, edge.vertices[1]);
+          vcBPA_CreateTriangle(pGrid, (uint32_t)vTrianglex, (uint32_t)vTriangley, (uint32_t)vTrianglez, ballCenter, *edge.vertices[0], pVertex->position, *edge.vertices[1]);
+          // v, e1
+          bool e1Active = vcBPA_InsertEdge(pGrid, ballCenter, *edge.vertices[0], &pVertex->position, edge.vertices[1], gridX, gridY, gridZ, voxelSize, gridXSize, gridYSize, gridZSize);
+          // e0, v
+          bool e2Active = vcBPA_InsertEdge(pGrid, ballCenter, *edge.vertices[1], edge.vertices[0], &pVertex->position, gridX, gridY, gridZ, voxelSize, gridXSize, gridYSize, gridZSize);
 
-          if (!vcBPAGridHashNode::FindEdgeInActiveEdges(pGrid, edge.vertices[0], pVertex))
-            vcBPA_InsertEdge(pGrid, ballCenter, *edge.vertices[1], edge.vertices[0], pVertex, gridX, gridY, gridZ, voxelSize, gridXSize, gridYSize, gridZSize);
-          else
-            vcBPAGridHashNode::RemoveEdge<vcBPAEdgeArray, vcBPAEdge, udDouble3 *>(pGrid->pActiveEdgesStack, pVertex, edge.vertices[0]);
-        }        
-      }
+          if (pVertex->used)
+          {
+            // e1, v, pair exists
+            if (e1Active)
+            {
+              if (vcBPAGridHashNode::FindEdge<vcBPAEdgeArray, udDouble3 *>(pGrid->activeEdgesStack, edge.vertices[1], &pVertex->position))
+                vcBPAGridHashNode::RemoveEdge<vcBPAEdgeArray, vcBPAEdge, udDouble3 *>(pGrid->activeEdgesStack, edge.vertices[1], &pVertex->position);
+            }
+            else
+            {
+              if (vcBPAGridHashNode::FindEdge<vcBPAFrozenEdgeArray, udDouble3 >(pGrid->frozenEdgesStack, *edge.vertices[1], pVertex->position))
+                vcBPAGridHashNode::RemoveEdge<vcBPAFrozenEdgeArray, vcBPAFrozenEdge, udDouble3>(pGrid->frozenEdgesStack, *edge.vertices[1], pVertex->position);
+            }
 
-      printf("vcBPA_BallPivot %f\n", udGetEpochMilliSecsUTCf() - _time);
+            // v, e0 pair exists
+            if (e2Active)
+            {
+              if (vcBPAGridHashNode::FindEdge<vcBPAEdgeArray, udDouble3 *>(pGrid->activeEdgesStack, &pVertex->position, edge.vertices[0]))
+                vcBPAGridHashNode::RemoveEdge<vcBPAEdgeArray, vcBPAEdge, udDouble3 *>(pGrid->activeEdgesStack, &pVertex->position, edge.vertices[0]);
+            }
+            else
+            {
+              if (vcBPAGridHashNode::FindEdge<vcBPAFrozenEdgeArray, udDouble3 >(pGrid->frozenEdgesStack, pVertex->position, *edge.vertices[0]))
+                vcBPAGridHashNode::RemoveEdge<vcBPAFrozenEdgeArray, vcBPAFrozenEdge, udDouble3>(pGrid->frozenEdgesStack, pVertex->position, *edge.vertices[0]);
+            }            
+          }
+          pVertex->used = true;
+        }
+      }      
     }
     else
     {
       static uint32_t number = 0;
       if (pUnuseArray == nullptr)
       {
-        double nt = udGetEpochMilliSecsUTCf();
         if (pCurrBlock == nullptr)
         {
           while(currHashIndex < HASH_ARRAY_LEN)
@@ -1172,7 +1361,7 @@ void vcBPA_DoGrid(void* pDataPtr, vcBPAGridHashNode *pGrid, double ballRadius, d
 
           if(pCurrBlock == nullptr && currHashIndex == HASH_ARRAY_LEN)
           {
-            printf("done.\n");
+            printf("vcBPA_DoGrid seek ends.\n");
             return;
           }
 
@@ -1206,7 +1395,7 @@ void vcBPA_DoGrid(void* pDataPtr, vcBPAGridHashNode *pGrid, double ballRadius, d
 
         if (unuseNum == 0)
         {
-g          printf(" no unuse points, to search a new position \n");
+          //printf(" no unuse points, to search a new position \n");
           udFree(pUnuseArray);
           unUseIndex = 0;
           pNode = nullptr;
@@ -1214,7 +1403,7 @@ g          printf(" no unuse points, to search a new position \n");
         }
 
         hashKey = pNode->hashKey;        
-        printf("points get time %f count %d of total %d\n", udGetEpochMilliSecsUTCf() - nt, number, pGrid->pBuffer->pointCount);
+        //printf("points get time %f count %d of total %d\n", udGetEpochMilliSecsUTCf() - nt, number, pGrid->pBuffer->pointCount);
       }
 
       double tt = udGetEpochMilliSecsUTCf();
@@ -1223,12 +1412,12 @@ g          printf(" no unuse points, to search a new position \n");
       {
         if (!pUnuseArray[unUseIndex]->used)
         {
-          printf("points %d of %d ", unUseIndex, unuseNum);
+          //printf("points %d of %d, position(%d,%d,%d)\n", unUseIndex, unuseNum, GET_X(hashKey), GET_Y(hashKey), GET_Z(hashKey));
           bool bRet = vcBPA_FindSeedTriangle(pGrid, pUnuseArray[unUseIndex++], GET_X(hashKey), GET_Y(hashKey), GET_Z(hashKey), gridX, gridY, gridZ, ballRadius, voxelSize, gridXSize, gridYSize, gridZSize);
           if (bRet)
           {
             tt = udGetEpochMilliSecsUTCf() - tt;
-            printf("vcBPA_FindSeedTriangle succ at %d/%d taks: %f(ms) %f(s)\n", unUseIndex - 1, unuseNum, tt, tt / 1000);
+            //printf("vcBPA_FindSeedTriangle succ at %d/%d taks: %f(ms) %f(s)\n", unUseIndex - 1, unuseNum, tt, tt / 1000);
             break;
           }
         }
@@ -1240,7 +1429,7 @@ g          printf(" no unuse points, to search a new position \n");
 
       if (unUseIndex == unuseNum)
       {
-        printf("all points were checked, to search a new voxel \n");
+        //printf("all points were checked, to search a new voxel \n");
         udFree(pUnuseArray);
         unuseNum = 0;
         unUseIndex = 0;
@@ -1266,6 +1455,7 @@ bool vcBPA_CanSlice(vcBPAManifold *pManifold, const udDouble3 boundingBoxExtents
 
   return false;
 }
+
 udDouble3 *vcBPA_FindPoint(vcBPAGridHashNode *pGrid, uint32_t x, uint32_t y, uint32_t z, udDouble3 &point)
 {
   vcBPAVoxel *pVoxel = pGrid->voxelHashMap.FindData(x, y, z);
@@ -1285,9 +1475,11 @@ udDouble3 *vcBPA_FindPoint(vcBPAGridHashNode *pGrid, uint32_t x, uint32_t y, uin
   return nullptr;
 }
 
-void vcBPA_UnfrozenEdges(vcBPAGridHashNode *pDestGrid, vcBPAGridHashNode *pSourceGrid, double minx, double maxx, double miny, double maxy, double minz, double maxz, double voxelSize)
+void vcBPA_UnfrozenEdges(vcBPAGridHashNode *pDestGrid, vcBPAGridHashNode *pSourceGrid, double minx, double maxx, double miny, double maxy, double minz, double maxz, double voxelSize, uint32_t gridX, uint32_t gridY, uint32_t gridZ, uint32_t gridXSize, uint32_t gridYSize, uint32_t gridZSize)
 {
-  vcBPAFrozenEdgeArray *pArr = pSourceGrid->pFrozenEdgesStack;
+  if (pSourceGrid->frozenEdgeCount == 0) return;
+
+  vcBPAFrozenEdgeArray *pArr = &pSourceGrid->frozenEdgesStack;
   if (pArr == nullptr) return;
 
   while (pArr->pTop != nullptr)
@@ -1316,14 +1508,8 @@ void vcBPA_UnfrozenEdges(vcBPAGridHashNode *pDestGrid, vcBPAGridHashNode *pSourc
           if (p1 != nullptr)
           {
             -- pSourceGrid->frozenEdgeCount;
-
-            vcBPAEdgeArray *pFind = FindAvailableStackArray<vcBPAEdgeArray>(pDestGrid->pActiveEdgesStack, vcBPAEdgeArray::ElementCount);
-            ++ pDestGrid->frozenEdgeCount;
-            vcBPAEdge &newEdge = pFind->edges[pFind->index++];
-            newEdge.vertices[0] = p0;
-            newEdge.vertices[1] = p1;
-            newEdge.ballCenter = frozenEdge.ballCenter;
-            newEdge.triangleZ = frozenEdge.triangleZ;
+            if (!vcBPAGridHashNode::FindEdge<vcBPAEdgeArray, udDouble3 *>(pDestGrid->activeEdgesStack, p0, p1))
+              vcBPA_InsertEdge(pDestGrid, frozenEdge.ballCenter, frozenEdge.triangleZ, p0, p1, gridX, gridY, gridZ, voxelSize, gridXSize, gridYSize, gridZSize);
           }
         }
       }
@@ -1333,16 +1519,12 @@ void vcBPA_UnfrozenEdges(vcBPAGridHashNode *pDestGrid, vcBPAGridHashNode *pSourc
   } while (pArr != nullptr);
 
   if (pSourceGrid->frozenEdgeCount == 0)
-  {
-    vcBPAGridHashNode::RemoveAllEdge<vcBPAFrozenEdgeArray>(pSourceGrid->pFrozenEdgesStack);
-    udFree(pSourceGrid->pFrozenEdgesStack);
-  }
+    vcBPAGridHashNode::RemoveAllEdge<vcBPAFrozenEdgeArray>(pSourceGrid->frozenEdgesStack);
+
 }
 
-void vcBPA_RunGridPopulation(void *pDataPtr, const vcBPAData &data, vdkAttributeSet *pAttributes)
+void vcBPA_RunGridPopulation(void *pDataPtr, const vcBPAData &data, vdkAttributeSet *pAttributes, std::ofstream &outputFile)
 {
-  printf("vcBPA_RunGridPopulation %d %d %d\n", data.gridx, data.gridy, data.gridz);
-
   vcBPAConvertItem *pData = (vcBPAConvertItem *)pDataPtr;
   udDouble3 halfSize = data.gridSize * 0.5;
   udDouble3 center = data.zero + halfSize;
@@ -1350,7 +1532,6 @@ void vcBPA_RunGridPopulation(void *pDataPtr, const vcBPAData &data, vdkAttribute
   //------------------------------------------------------------
   // add a hash node for the new model
   vcVoxelGridHashNode *pNewModelGrid = pData->pManifold->newModelMap.AddNode(data.gridx, data.gridy, data.gridz);
-  pNewModelGrid->Init();
   pNewModelGrid->zero = data.zero;
   pNewModelGrid->end = data.zero + data.gridSize;
   pNewModelGrid->vxSize = (uint32_t)((data.gridSize.x + pData->pManifold->voxelSize - UD_EPSILON) / pData->pManifold->voxelSize);
@@ -1361,14 +1542,17 @@ void vcBPA_RunGridPopulation(void *pDataPtr, const vcBPAData &data, vdkAttribute
   vcBPA_QueryPoints(pData->pManifold->pContext, pData->pNewModel, &center.x, &halfSize.x, pNewModelGrid->pBuffer);
 
   double _time = udGetEpochMilliSecsUTCf();
+
   for (uint32_t j = 0; j < pNewModelGrid->pBuffer->pointCount; ++j)
     vcBPA_AddPoints(j, pNewModelGrid->pBuffer->pPositions[j * 3 + 0], pNewModelGrid->pBuffer->pPositions[j * 3 + 1], pNewModelGrid->pBuffer->pPositions[j * 3 + 2], pNewModelGrid->zero, &pNewModelGrid->voxelHashMap, pData->pManifold->voxelSize);
   pNewModelGrid->pointNum = pNewModelGrid->pBuffer->pointCount;
 
   _time = udGetEpochMilliSecsUTCf() - _time;
-  printf("vcBPA_AddPoints from new model: num: %d, time costs: %f ms %f s %f min\n", pNewModelGrid->pBuffer->pointCount, _time, _time/1000, _time/60000);
+  printf("vcBPA_AddPoints from new model: num: %d, time costs: %f(ms) %f(s) %f(m)\n", pNewModelGrid->pBuffer->pointCount, _time, _time/1000, _time/60000);
+  outputFile << "vcBPA_AddPoints from new model: num: " << pNewModelGrid->pBuffer->pointCount
+    << ", time costs: " << _time << "(ms) " << _time / 1000 << "(s) " << _time / 60000 << "(min)\n";
+  outputFile.flush();
 
-  
   // get points in the grid of old model, if empty, skip
   vdkPointBufferF64 *pBuffer;
   vdkPointBufferF64_Create(&pBuffer, MAX_POINTNUM, nullptr);
@@ -1392,7 +1576,6 @@ void vcBPA_RunGridPopulation(void *pDataPtr, const vcBPAData &data, vdkAttribute
   }
 
   vcBPAGridHashNode *pOldModelGrid = pData->pManifold->oldModelMap.AddNode(data.gridx, data.gridy, data.gridz);
-  pOldModelGrid->Init();
   pOldModelGrid->pBuffer = pBuffer;
   pOldModelGrid->zero = pNewModelGrid->zero;
   pOldModelGrid->end = pNewModelGrid->end;
@@ -1412,31 +1595,38 @@ void vcBPA_RunGridPopulation(void *pDataPtr, const vcBPAData &data, vdkAttribute
 
   _time = udGetEpochMilliSecsUTCf() - _time;
   printf("vcBPA_AddPoints from old model: num: %d, time costs: %f ms %f s %f min\n", pOldModelGrid->pBuffer->pointCount, _time, _time / 1000, _time / 60000);
-
+  outputFile << "vcBPA_AddPoints from old model: num: " << pNewModelGrid->pBuffer->pointCount
+    << ", time costs: " << _time << "(ms) " << _time / 1000 << "(s) " << _time / 60000 << "(min)\n";
+  outputFile.flush();
   if (data.gridx > 0)
   {
     vcBPAGridHashNode *lastX = pData->pManifold->oldModelMap.FindData(data.gridx - 1, data.gridy, data.gridz);
     if (lastX != nullptr)
-      vcBPA_UnfrozenEdges(pOldModelGrid, lastX, pOldModelGrid->zero.x, data.zero.x, lastX->zero.y, lastX->zero.y + pData->pManifold->baseGridSize, lastX->zero.z, lastX->zero.z + pData->pManifold->baseGridSize, pData->pManifold->voxelSize);
+      vcBPA_UnfrozenEdges(pOldModelGrid, lastX, pOldModelGrid->zero.x, data.zero.x, lastX->zero.y, lastX->zero.y + pData->pManifold->baseGridSize, lastX->zero.z, lastX->zero.z + pData->pManifold->baseGridSize, pData->pManifold->voxelSize, data.gridx, data.gridy, data.gridz, data.gridXSize, data.gridYSize, data.gridZSize);
   }
 
   if (data.gridy > 0)
   {
     vcBPAGridHashNode *lastY = pData->pManifold->oldModelMap.FindData(data.gridx, data.gridy - 1, data.gridz);
     if (lastY != nullptr)
-      vcBPA_UnfrozenEdges(pOldModelGrid, lastY, lastY->zero.x, lastY->zero.x + pData->pManifold->baseGridSize - pData->pManifold->voxelSize, pOldModelGrid->zero.y, data.zero.y, lastY->zero.z, lastY->zero.z + pData->pManifold->baseGridSize - pData->pManifold->voxelSize, pData->pManifold->voxelSize);
+      vcBPA_UnfrozenEdges(pOldModelGrid, lastY, lastY->zero.x, lastY->zero.x + pData->pManifold->baseGridSize - pData->pManifold->voxelSize, pOldModelGrid->zero.y, data.zero.y, lastY->zero.z, lastY->zero.z + pData->pManifold->baseGridSize - pData->pManifold->voxelSize, pData->pManifold->voxelSize, data.gridx, data.gridy, data.gridz, data.gridXSize, data.gridYSize, data.gridZSize);
   }
 
   if (data.gridz > 0)
   {
     vcBPAGridHashNode *lastZ = pData->pManifold->oldModelMap.FindData(data.gridx, data.gridy, data.gridz - 1);
-    vcBPA_UnfrozenEdges(pOldModelGrid, lastZ, lastZ->zero.x, lastZ->zero.x + pData->pManifold->baseGridSize - pData->pManifold->voxelSize, lastZ->zero.y, lastZ->zero.y + pData->pManifold->baseGridSize, pOldModelGrid->zero.z, data.zero.z, pData->pManifold->voxelSize);
+    if (lastZ != nullptr)
+      vcBPA_UnfrozenEdges(pOldModelGrid, lastZ, lastZ->zero.x, lastZ->zero.x + pData->pManifold->baseGridSize - pData->pManifold->voxelSize, lastZ->zero.y, lastZ->zero.y + pData->pManifold->baseGridSize, pOldModelGrid->zero.z, data.zero.z, pData->pManifold->voxelSize, data.gridx, data.gridy, data.gridz, data.gridXSize, data.gridYSize, data.gridZSize);
   }
 
-  vcBPA_DoGrid(pDataPtr, pOldModelGrid, pData->pManifold->ballRadius, pData->pManifold->voxelSize, data.gridx, data.gridy, data.gridz, data.gridXSize, data.gridYSize, data.gridZSize);
-  vcBPAGridHashNode::CleanBPAData(pOldModelGrid);
-
-  printf("vcBPA_DoGrid done. triangleSize:%d. \n", pOldModelGrid->triangleSize);
+  _time = udGetEpochMilliSecsUTCf();
+  vcBPA_DoGrid(pOldModelGrid, pData->pManifold->ballRadius, pData->pManifold->voxelSize, data.gridx, data.gridy, data.gridz, data.gridXSize, data.gridYSize, data.gridZSize);
+  pOldModelGrid->CleanBPAData();
+  _time = udGetEpochMilliSecsUTCf() - _time;
+  printf("vcBPA_DoGrid done. triangleSize:%d time costs: %f(s) %f(min). \n", pOldModelGrid->triangleSize, _time / 1000, _time / 60000);
+  outputFile << "vcBPA_DoGrid done. triangleSize: " << pOldModelGrid->triangleSize
+    << ", time costs: " << _time / 1000 << "(s) " << _time / 60000 << "(min)\n";
+  outputFile.flush();
 
   vcBPAConvertItemData item = {};
   item.pManifold = pData->pManifold;
@@ -1466,10 +1656,13 @@ uint32_t vcBPA_ProcessThread(void *pDataPtr)
   udDouble3 newModelZero = (m_sceneMatrix * udDouble4::create(localZero, 1.0)).toVector3();
   udDouble3 newModelCenter = (m_sceneMatrix * udDouble4::create(header.boundingBoxCenter[0], header.boundingBoxCenter[1], header.boundingBoxCenter[2], 1.0)).toVector3();
 
+  std::ofstream outputFile("output.txt", std::ofstream::out);
+
   //try to slice
   if (!vcBPA_CanSlice(pData->pManifold, newModelExtents))
   {
     printf("slice failed, release pManifold \n");
+    outputFile << "slice failed, release pManifold \n";
 
     pData->pManifold->Deinit();
     udFree(pData->pManifold);
@@ -1482,34 +1675,43 @@ uint32_t vcBPA_ProcessThread(void *pDataPtr)
   uint32_t gridYSize = (uint32_t)((newModelExtents.y + pData->pManifold->baseGridSize - UD_EPSILON) / pData->pManifold->baseGridSize);
   uint32_t gridZSize = (uint32_t)((newModelExtents.z + pData->pManifold->baseGridSize - UD_EPSILON) / pData->pManifold->baseGridSize);
 
-  printf("slice success: gridsize %f gridXSize %d gridYSize %d gridZSize %d \n", pData->pManifold->baseGridSize, gridXSize, gridYSize, gridZSize);
+  printf("slice success: radius:%f grid size:%f grid num:(%d, %d, %d) \n", pData->ballRadius, pData->pManifold->baseGridSize, gridXSize, gridYSize, gridZSize);
+  outputFile << "slice success: radius:"<< pData->ballRadius << "grid size:" << pData->pManifold->baseGridSize << "grid num:("<< gridXSize << "," << gridYSize << "," << gridZSize <<") \n";
 
   static const int NUM = 1;
   vdkPointBufferF64 *pBuffer = nullptr;
-  vdkPointBufferF64_Create(&pBuffer, NUM, nullptr);
+  vdkPointBufferF64_Create(&pBuffer, NUM, nullptr);  
 
   udDouble3 zero;
   udDouble3 gridSize;
   uint32_t gridx = 0;
   uint32_t gridy = 0;
   uint32_t gridz = 0;
+
+  double totalTime = udGetEpochMilliSecsUTCf();
+
   for (gridx = 0, zero.x = newModelZero.x; gridx < gridXSize; gridx++, zero.x += pData->pManifold->baseGridSize)
   {
     // real grid x size
-    gridSize.x = udMin(pData->pManifold->baseGridSize, newModelExtents.x - zero.x);
+    gridSize.x = udMin(pData->pManifold->baseGridSize, newModelExtents.x);
     for (gridy = 0, zero.y = newModelZero.y; gridy < gridYSize; gridy++, zero.y += pData->pManifold->baseGridSize)
     {
       // real grid y size
-      gridSize.y = udMin(pData->pManifold->baseGridSize, newModelExtents.y - zero.y);
+      gridSize.y = udMin(pData->pManifold->baseGridSize, newModelExtents.y);
       for (gridz = 0, zero.z = newModelZero.z; gridz < gridZSize; gridz++, zero.z += pData->pManifold->baseGridSize)
       {
         if (pData->running.Get() != vcBPARS_Active)
-          break;
-
-        printf("running: %s check grid(%d, %d, %d)\n", (pData->running.Get() == vcBPARS_Active) ? "true" : "false" , gridx, gridy, gridz);
-
+          goto quit;
         // real grid z size
-        gridSize.z = udMin(pData->pManifold->baseGridSize, newModelExtents.z - zero.z);
+        gridSize.z = udMin(pData->pManifold->baseGridSize, newModelExtents.z);
+
+        printf("running: %s check grid(%d, %d, %d) size(%f, %f, %f)\n",
+          (pData->running.Get() == vcBPARS_Active) ? "true" : "false"
+          , gridx, gridy, gridz, gridSize.x, gridSize.y, gridSize.z);
+        outputFile << "running:" << ((pData->running.Get() == vcBPARS_Active) ? "true" : "false")
+          << "check grid:(" << gridx << "," << gridy << "," << gridz << ")"
+          << " size:(" << gridXSize << "," << gridYSize << "," << gridZSize << ") \n";
+
         udDouble3 halfSize = gridSize * 0.5;
         udDouble3 center = zero + halfSize;
 
@@ -1518,6 +1720,8 @@ uint32_t vcBPA_ProcessThread(void *pDataPtr)
         if (0 == pBuffer->pointCount)
         {
           printf("no points \n");
+          outputFile << "no points \n";
+          outputFile.flush();
           continue;
         }          
 
@@ -1531,12 +1735,19 @@ uint32_t vcBPA_ProcessThread(void *pDataPtr)
         data.gridXSize = gridXSize;
         data.gridYSize = gridYSize;
         data.gridZSize = gridZSize;
-        vcBPA_RunGridPopulation(pDataPtr, data, &header.attributes);
+        vcBPA_RunGridPopulation(pDataPtr, data, &header.attributes, outputFile);
       }
     }      
   }
 
+quit:
+  totalTime = udGetEpochMilliSecsUTCf() - totalTime;
+  outputFile << "vcBPA_ProcessThread done. Total time costs: " << totalTime / 1000 << "(s) " << totalTime / 60000 << "(min)\n";
+  outputFile.flush();
+
   vdkPointBufferF64_Destroy(&pBuffer);
+  outputFile.flush();
+  outputFile.close();
 
   // done
   if (pData->running.Get() == vcBPARS_Active && gridx == gridXSize && gridy == gridYSize && gridz == gridZSize)
@@ -1583,9 +1794,11 @@ vdkError vcBPA_ConvertOpen(vdkConvertCustomItem *pConvertInput, uint32_t everyNt
   return vE_Success;
 }
 
-
 vcBPATriangle *vcBPA_FindClosestTriangle(double &minDistance, vcBPAGridHashNode *pGrid, udDouble3 &position, uint32_t x, uint32_t y, uint32_t z, udDouble3 *cloestPoint)
 {
+  if (pGrid == nullptr)
+    return nullptr;
+
   int32_t vcx = (int32_t)x;
   int32_t vcy = (int32_t)y;
   int32_t vcz = (int32_t)z;
@@ -1625,55 +1838,151 @@ vcBPATriangle *vcBPA_FindClosestTriangle(double &minDistance, vcBPAGridHashNode 
   return find;
 }
 
+void vcBPA_WaitNextGrid(vcBPAConvertItem *pData)
+{
+  printf("vcBPA_WaitNextGrid start \n");
+
+  do
+  {
+    if (pData->running.Get() != vcBPARS_Active) return;
+
+    if (udSafeDeque_PopFront(pData->pConvertItemData, &pData->activeItem) == udR_Success)
+      break;
+
+    udSleep(1000);
+
+  } while (true);
+
+  printf("vcBPA_WaitNextGrid end\n");
+}
+
+void vcBPA_ReadGrid(vcBPAConvertItem *pData, vdkPointBufferF64 *pBuffer, uint32_t displacementOffset, udUInt3 displacementDistanceOffset)
+{
+  static int tcount = 0;
+  vcVoxelGridHashNode *pNewModelGrid = pData->activeItem.pNewModelGrid;
+  vcBPAGridHashNode *pOldModelGrid = pData->activeItem.pOldModelGrid;
+  if (pData->ppVertex == nullptr)
+  {
+    vcBPAVoxel *pVoxel = nullptr;
+    while (pVoxel == nullptr)
+    {
+      pVoxel = pNewModelGrid->voxelHashMap.FindData(pData->v.x, pData->v.y, pData->v.z);
+      ++pData->v.z;
+      if (pData->v.z == pNewModelGrid->vzSize)
+      {
+        pData->v.z = 0;
+        ++pData->v.y;
+        if (pData->v.y == pNewModelGrid->vySize)
+        {
+          pData->v.y = 0;
+          pData->v.x++;
+          if (pData->v.x == pNewModelGrid->vxSize)
+            break;
+        }
+      }
+    }
+
+    if (pVoxel == nullptr)
+    {
+      printf("doone. \n");
+      return;
+    }      
+
+    pData->ppVertex = udAllocType(vcBPAVertex *, pVoxel->pointNum, udAF_Zero);
+    pVoxel->ToArray(pData->ppVertex);
+    pData->pointIndex = 0;
+    pData->arrayLength = pVoxel->pointNum;
+  }
+
+  while(pData->pointIndex < pData->arrayLength)
+  {
+    vcBPAVertex *pPoint = pData->ppVertex[pData->pointIndex++];
+
+    double distance = FLT_MAX;
+    udDouble3 cloestPoint = {};
+    vcBPATriangle *t = vcBPA_FindClosestTriangle(distance, pOldModelGrid, pPoint->position, pData->v.x, pData->v.y, pData->v.z, &cloestPoint);
+
+    if (t != nullptr)
+    {
+      // new point
+      udDouble3 normal = vcBPA_GetTriangleNormal(t->vertices[0], t->vertices[1], t->vertices[2]);
+      udDouble3 p0_to_position = pPoint->position - t->vertices[0];
+      if (udDot3(p0_to_position, normal) < 0.0)
+        distance = -distance;
+    }
+
+    // Position XYZ
+    memcpy(&pBuffer->pPositions[pBuffer->pointCount * 3], &pNewModelGrid->pBuffer->pPositions[pPoint->j * 3], sizeof(double) * 3);
+
+    // Copy all of the original attributes
+    ptrdiff_t pointAttrOffset = ptrdiff_t(pBuffer->pointCount) * pBuffer->attributeStride;
+    for (uint32_t k = 0; k < pNewModelGrid->pBuffer->attributes.count; ++k)
+    {
+      vdkAttributeDescriptor &oldAttrDesc = pNewModelGrid->pBuffer->attributes.pDescriptors[k];
+      uint32_t attributeSize = (oldAttrDesc.typeInfo & (vdkAttributeTypeInfo_SizeMask << vdkAttributeTypeInfo_SizeShift));
+
+      // Get attribute old offset and pointer
+      uint32_t attrOldOffset = 0;
+      if (vdkAttributeSet_GetOffsetOfNamedAttribute(&pNewModelGrid->pBuffer->attributes, oldAttrDesc.name, &attrOldOffset) != vE_Success)
+        continue;
+
+      void *pOldAttr = udAddBytes(pNewModelGrid->pBuffer->pAttributes, k * pNewModelGrid->pBuffer->attributeStride + attrOldOffset);
+
+      // Get attribute new offset and pointer
+      uint32_t attrNewOffset = 0;
+      if (vdkAttributeSet_GetOffsetOfNamedAttribute(&pBuffer->attributes, oldAttrDesc.name, &attrNewOffset) != vE_Success)
+        continue;
+
+      void *pNewAttr = udAddBytes(pBuffer->pAttributes, pointAttrOffset + attrNewOffset);
+
+      // Copy attribute data
+      memcpy(pNewAttr, pOldAttr, attributeSize);
+    }
+
+    // Displacement
+    float *pDisplacement = (float *)udAddBytes(pBuffer->pAttributes, pointAttrOffset + displacementOffset);
+    *pDisplacement = (float)distance;
+
+    for (int elementIndex = 0; elementIndex < 3; ++elementIndex) //X,Y,Z
+    {
+      float *pDisplacementDistance = (float *)udAddBytes(pBuffer->pAttributes, pointAttrOffset + displacementDistanceOffset[elementIndex]);
+      if (distance != FLT_MAX)
+        *pDisplacementDistance = (float)((cloestPoint[elementIndex] - pPoint->position[elementIndex]) / distance);
+      else
+        *pDisplacementDistance = 0.0;
+    }
+
+    ++pBuffer->pointCount;
+    ++tcount;
+    --pData->activeItem.leftPoint;
+    
+    if (pData->activeItem.leftPoint == 0)
+      break;
+
+    if (pBuffer->pointCount == pBuffer->pointsAllocated)
+    {
+      printf("vcBPA_ReadGrid finish reading once of %d allocated. total write count: %d\n", pBuffer->pointsAllocated, tcount);
+      break;
+    }      
+  } 
+
+  if (pData->pointIndex == pData->arrayLength)
+  {
+    udFree(pData->ppVertex);
+    pData->pointIndex = 0;
+    pData->arrayLength = 0;
+  }
+
+}
+
 vdkError vcBPA_ConvertReadPoints(vdkConvertCustomItem *pConvertInput, vdkPointBufferF64 *pBuffer)
 {
-  printf("pBuffer->pointsAllocated: %d pBuffer->pointCount: %d\n", pBuffer->pointsAllocated, pBuffer->pointCount);
-
+  printf("vcBPA_ConvertReadPoints called, pBuffer->pointsAllocated %d\n", pBuffer->pointsAllocated);
+  
   vcBPAConvertItem *pData = (vcBPAConvertItem *)pConvertInput->pData;
-  uint32_t toFill = pBuffer->pointsAllocated - pBuffer->pointCount;
-  uint32_t canRead = 0;
-
-  if (toFill == 0)
-  {
-    memset(pBuffer->pAttributes, 0, pBuffer->attributeStride * pBuffer->pointsAllocated);
-    pBuffer->pointCount = 0;
-    toFill = pBuffer->pointsAllocated;
-  }
-
-  if (pData->pActiveItem == nullptr)
-  {
-    pData->processInfo = {};
-    pData->pActiveItem = udAllocType(vcBPAConvertItemData, 1, udAF_Zero);
-    do 
-    {
-      if (udSafeDeque_PopFront(pData->pConvertItemData, pData->pActiveItem) == udR_Success)
-      {
-        canRead = pData->pActiveItem->leftPoint;
-        if (canRead > 0)
-        {
-          printf("new block %d can read\n", canRead);
-          break;
-        }
-
-        // done
-        if (pData->pActiveItem->pNewModelGrid == nullptr)
-        {
-          udFree(pData->pActiveItem);
-          pData->running.Set(vcBPARS_Success);
-          return vE_Success;
-        }
-
-      }
-      
-      udSleep(100);
-
-    } while (pData->running.Get() == vcBPARS_Active);
-   
-  }
-
-  canRead = udMin(canRead, toFill);
-  pData->pActiveItem->leftPoint -= canRead;
-  pBuffer->pointCount += canRead;
+  pBuffer->pointCount = 0;
+  if (pData->running.Get() == vcBPARS_Success)
+    return vE_Success;
 
   uint32_t displacementOffset = 0;
   udUInt3 displacementDistanceOffset = {};
@@ -1695,95 +2004,33 @@ vdkError vcBPA_ConvertReadPoints(vdkConvertCustomItem *pConvertInput, vdkPointBu
   if (error != vE_Success)
     return error;
 
-  vcVoxelGridHashNode *pNewModelGrid = pData->pActiveItem->pNewModelGrid;
-  for (; pData->processInfo.voxelX < pNewModelGrid->vxSize; ++pData->processInfo.voxelX)
+  while (true)
   {
-    for (; pData->processInfo.voxelY < pNewModelGrid->vySize; ++pData->processInfo.voxelY)
+    if (pData->activeItem.pNewModelGrid == nullptr || pData->activeItem.pNewModelGrid != nullptr && pData->activeItem.leftPoint == 0)
     {
-      for (; pData->processInfo.voxelZ < pNewModelGrid->vzSize; ++pData->processInfo.voxelZ)
+      pData->CleanReadData();
+      vcBPA_WaitNextGrid(pData);
+
+      // done
+      if (pData->activeItem.pNewModelGrid == nullptr)
       {
-        // to read voxel one by one until get enough 'canRead' points
-        if (pData->processInfo.pArray == nullptr)
-        {
-          vcBPAVoxel *pVoxel = pNewModelGrid->voxelHashMap.FindData(pData->processInfo.voxelX, pData->processInfo.voxelY, pData->processInfo.voxelZ);
-          if (pVoxel == nullptr)
-            continue;
-          pData->processInfo.pArray = udAllocType(vcBPAVertex *, pVoxel->pointNum, udAF_Zero);
-          pVoxel->ToArray(pData->processInfo.pArray);
-          pData->processInfo.currIndex = 0;
-          pData->processInfo.arrayLen = pVoxel->pointNum;
-        }
-
-        for (; pData->processInfo.currIndex < pData->processInfo.arrayLen; pData->processInfo.currIndex++)
-        {
-          vcBPAVertex *pPoint = pData->processInfo.pArray[pData->processInfo.currIndex];
-
-          double distance = FLT_MAX;
-          udDouble3 cloestPoint = {};
-          vcBPATriangle *t = vcBPA_FindClosestTriangle(distance, pData->pActiveItem->pOldModelGrid, pPoint->position, pData->processInfo.voxelX, pData->processInfo.voxelY, pData->processInfo.voxelZ, &cloestPoint);
-          
-          if (t != nullptr)
-          {
-            // new point
-            udDouble3 normal = vcBPA_GetTriangleNormal(t->vertices[0], t->vertices[1], t->vertices[2]);
-            udDouble3 p0_to_position = pPoint->position - t->vertices[0];
-            if (udDot3(p0_to_position, normal) < 0.0)
-              distance = -distance;
-          }
-
-          // Position XYZ
-          memcpy(&pBuffer->pPositions[pBuffer->pointCount * 3], &pNewModelGrid->pBuffer->pPositions[pPoint->j * 3], sizeof(double) * 3);
-
-          // Copy all of the original attributes
-          vdkAttributeDescriptor &oldAttrDesc = pNewModelGrid->pBuffer->attributes.pDescriptors[pPoint->j];
-          uint32_t attributeSize = (oldAttrDesc.typeInfo & (vdkAttributeTypeInfo_SizeMask << vdkAttributeTypeInfo_SizeShift));
-
-          // Get attribute old offset and pointer
-          uint32_t attrOldOffset = 0;
-          vdkAttributeSet_GetOffsetOfNamedAttribute(&pNewModelGrid->pBuffer->attributes, oldAttrDesc.name, &attrOldOffset);
-          void *pOldAttr = udAddBytes(pNewModelGrid->pBuffer->pAttributes, attrOldOffset);
-
-          // Get attribute new offset and pointer
-          uint32_t attrNewOffset = 0;
-          vdkAttributeSet_GetOffsetOfNamedAttribute(&pBuffer->attributes, oldAttrDesc.name, &attrNewOffset);
-
-          void *pNewAttr = udAddBytes(pBuffer->pAttributes, attrNewOffset);
-          // Copy attribute data
-          memcpy(pNewAttr, pOldAttr, attributeSize);
-
-          // Displacement
-          float *pDisplacement = (float *)udAddBytes(pBuffer->pAttributes, displacementOffset);
-          *pDisplacement = (float)distance;
-
-          for (int elementIndex = 0; elementIndex < 3; ++elementIndex) //X,Y,Z
-          {
-            float *pDisplacementDistance = (float *)udAddBytes(pBuffer->pAttributes, displacementDistanceOffset[elementIndex]);
-            if (distance != FLT_MAX)
-              *pDisplacementDistance = (float)((cloestPoint[elementIndex] - pPoint->position[elementIndex]) / distance);
-            else
-              *pDisplacementDistance = 0.0;
-          }
-
-          ++pBuffer->pointCount;
-          
-          canRead--;
-          if (canRead == 0)
-            goto check;
-        }
-
-        udFree(pData->processInfo.pArray);
-        pData->processInfo.currIndex = 0;
+        printf("done. last write: %d\n", pBuffer->pointCount);
+        pData->CleanReadData();
+        pData->running.Set(vcBPARS_Success);
+        return vE_Success;
       }
+
+      printf("vcBPA_ConvertReadPoints new grid %d to read. \n", pData->activeItem.leftPoint);
+      pData->v = udUInt3::zero();
     }
+
+    vcBPA_ReadGrid(pData, pBuffer, displacementOffset, displacementDistanceOffset);
+
+    if(pBuffer->pointCount == pBuffer->pointsAllocated)
+      return vE_Success;
   }
-    
-check:
 
-  if (pData->processInfo.voxelX == pNewModelGrid->vxSize && pData->processInfo.voxelY == pNewModelGrid->vySize && pData->processInfo.voxelZ == pNewModelGrid->vzSize)
-    udFree(pData->pActiveItem);
-
-  return vE_Pending;
-
+  return vE_Success;
 }
 
 void vcBPA_ConvertClose(vdkConvertCustomItem *pConvertInput)
@@ -1792,39 +2039,21 @@ void vcBPA_ConvertClose(vdkConvertCustomItem *pConvertInput)
 
   vcBPAConvertItem *pData = (vcBPAConvertItem *)pConvertInput->pData;
   if (pData->running.Get() == vcBPARS_Active)
-  {
-    pData->running.Set(vcBPARS_Cancel);
-    return;
-  }  
+    pData->running.Set(vcBPARS_Close);
+
+  pData->Deinit();
+
 }
 
 void vcBPA_ConvertDestroy(vdkConvertCustomItem *pConvertInput)
 {
   printf("vcBPA_ConvertDestroy \n");
-
-  vcBPAConvertItem *pData = (vcBPAConvertItem *)pConvertInput->pData;
-
-  udThread_Join(pData->pThread);
-  udThread_Destroy(&pData->pThread);
-  pData->pActiveItem = {};
-  udSafeDeque_Destroy(&pData->pConvertItemData);
-
-  if (pData->running.Get() != vcBPARS_End)
-  {
-    pData->running.Set(vcBPARS_End);
-    pData->pManifold->Deinit();
-    udFree(pData->pManifold);
-  }
-
   vcBPAConvertItem *pBPA = (vcBPAConvertItem*)pConvertInput->pData;
   vdkPointCloud_Unload(&pBPA->pOldModel);
   vdkPointCloud_Unload(&pBPA->pNewModel);
   vdkAttributeSet_Free(&pConvertInput->attributes);
   udFree(pConvertInput->pData);
 }
-
-
-
 
 void vcBPA_CompareExport(vcState *pProgramState, const char *pOldModelPath, const char *pNewModelPath, double ballRadius, double gridSize, const char *pName)
 {
