@@ -24,14 +24,14 @@
 // for data structure
 typedef uint8_t TINDEX; // max 255, needs bigger than BLOCK_SIZE
 static const uint32_t BLOCK_SIZE = 32; // 1 << 7
-static const uint32_t HASH_ARRAY_LEN = 512; // (111 111 111) + 1, 3 bits for x/y/z
-static const uint32_t HASH_ARRAY_MASK = 7; // 111
+static const uint32_t HASH_ARRAY_LEN = 4096; // (1111 1111 1111) + 1, 4 bits for x/y/z
+static const uint32_t HASH_ARRAY_MASK = 15; // 1111
 #define GET_HASHINDEX(x, y, z) (((uint32_t)(x) & HASH_ARRAY_MASK) << 6 | ((uint32_t)(y) & HASH_ARRAY_MASK) << 3 | ((uint32_t)(z) & HASH_ARRAY_MASK) )
 
 // for BPA
 typedef uint32_t HASHKEY;
-static const uint32_t BPA_LEVEL_LEN = 1024; // max voxel (1<<10) supported by uint32.
-static const uint32_t BPA_LEVEL_MASK = 1023; // max voxel index (1<<10 - 1) (11 1111 1111)supported by uint32.
+static const uint32_t BPA_LEVEL_LEN = 512; // max voxel (1<<10) supported by uint32.
+static const uint32_t BPA_LEVEL_MASK = 511; // max voxel index (1<<10 - 1) (11 1111 1111)supported by uint32.
 static const uint32_t MAX_POINTNUM = 1 << 25; // can read maximum 33,554,432 points in cube(2r*2r*2r*LEVEL_LEN*LEVEL_LEN*LEVEL_LEN)meter
 #define GET_HASHKEY(x, y, z) (((uint32_t)(x) & BPA_LEVEL_MASK) << 20 | ((uint32_t)(y) & BPA_LEVEL_MASK) << 10 | ((uint32_t)(z) & BPA_LEVEL_MASK) )
 #define GET_X(code) ( ((HASHKEY)(code) >> 20) & BPA_LEVEL_MASK )
@@ -315,8 +315,9 @@ TEdge *FindAvailableStackArray(TEdgeArray &pBottomArray)
 enum vcBPARunningStatus
 {
   vcBPARS_Active,
-  vcBPARS_Failed,
+  vcBPARS_BPADone,
   vcBPARS_Success,
+  vcBPARS_Failed,
   vcBPARS_Close,
   vcBPARS_End
 };
@@ -1219,17 +1220,21 @@ struct vcBPAConvertItem
 
   udSafeDeque<vcBPAConvertItemData> *pConvertItemData;
   vcBPAConvertItemData activeItem;
-  udUInt3 v;
-  vcBPAVertex **ppVertex;
-  uint32_t pointIndex;
-  uint32_t arrayLength;
+  uint32_t hashIndex;
+  HASHKEY hashKey;
+
+  vcBPAVertex **ppVertex; // points array of voxel
+  uint32_t pointIndex; // index of points array of voxel
+  uint32_t arrayLength; // length of points array of voxel
+
 
   udThread *pThread;
   udInterlockedInt32 running;
 
   void CleanReadData()
   {
-    v = udUInt3::zero();
+    hashIndex = 0;
+    hashKey = 0;
 
     if (ppVertex)
       udFree(ppVertex);
@@ -1525,6 +1530,8 @@ void vcBPA_UnfrozenEdges(vcBPAGridHashNode *pDestGrid, vcBPAGridHashNode *pSourc
 
 void vcBPA_RunGridPopulation(void *pDataPtr, const vcBPAData &data, vdkAttributeSet *pAttributes, std::ofstream &outputFile)
 {
+  printf("vcBPA_RunGridPopulation.\n");
+
   vcBPAConvertItem *pData = (vcBPAConvertItem *)pDataPtr;
   udDouble3 halfSize = data.gridSize * 0.5;
   udDouble3 center = data.zero + halfSize;
@@ -1540,6 +1547,7 @@ void vcBPA_RunGridPopulation(void *pDataPtr, const vcBPAData &data, vdkAttribute
 
   vdkPointBufferF64_Create(&pNewModelGrid->pBuffer, MAX_POINTNUM, pAttributes);
   vcBPA_QueryPoints(pData->pManifold->pContext, pData->pNewModel, &center.x, &halfSize.x, pNewModelGrid->pBuffer);
+  printf("vcBPA_QueryPoints pNewModel return %d.\n", pNewModelGrid->pBuffer->pointCount);
 
   double _time = udGetEpochMilliSecsUTCf();
 
@@ -1557,6 +1565,7 @@ void vcBPA_RunGridPopulation(void *pDataPtr, const vcBPAData &data, vdkAttribute
   vdkPointBufferF64 *pBuffer;
   vdkPointBufferF64_Create(&pBuffer, MAX_POINTNUM, nullptr);
   vcBPA_QueryPoints(pData->pManifold->pContext, pData->pOldModel, &center.x, &halfSize.x, pBuffer);
+  printf("vcBPA_QueryPoints pOldModel return %d.\n", pBuffer->pointCount);
   if (pBuffer->pointCount == 0)
   {
     vdkPointBufferF64_Destroy(&pBuffer);
@@ -1758,6 +1767,8 @@ quit:
     data.pOldModelGrid = nullptr;
     data.pOldModel = pData->pOldModel;
     udSafeDeque_PushBack(pData->pConvertItemData, data);
+    if (pData->running.Get() == vcBPARS_Active)
+      pData->running.Set(vcBPARS_BPADone);
   }    
   else
   {
@@ -1844,7 +1855,7 @@ void vcBPA_WaitNextGrid(vcBPAConvertItem *pData)
 
   do
   {
-    if (pData->running.Get() != vcBPARS_Active) return;
+    if (pData->running.Get() > vcBPARS_BPADone) return;
 
     if (udSafeDeque_PopFront(pData->pConvertItemData, &pData->activeItem) == udR_Success)
       break;
@@ -1856,125 +1867,182 @@ void vcBPA_WaitNextGrid(vcBPAConvertItem *pData)
   printf("vcBPA_WaitNextGrid end\n");
 }
 
+vcBPAHashMap<HASHKEY, vcBPAVoxel>::HashNode *FindNextNode(vcBPAConvertItem *pData)
+{
+  vcBPAHashMap<HASHKEY, vcBPAVoxel>::HashNodeBlock *pBlock = pData->activeItem.pNewModelGrid->voxelHashMap.pArray[pData->hashIndex];
+  while (pData->hashIndex < HASH_ARRAY_LEN)
+  {
+    if (pBlock == nullptr)
+    {
+      pBlock = pData->activeItem.pNewModelGrid->voxelHashMap.pArray[++pData->hashIndex];
+      if (pBlock == nullptr)
+        continue;
+    }
+
+    if (pData->hashKey > 0)
+    {
+      int32_t iNext = -1;
+      for (TINDEX i = 0; i < pBlock->index; i++)
+      {
+        vcBPAHashMap<HASHKEY, vcBPAVoxel>::HashNode *pSearch = pBlock->pBlockData[i];
+        if (pSearch->hashKey == pData->hashKey) // current node found, to get next one
+        {
+          iNext = i + 1;
+          break;
+        }
+      }
+
+      // searching next block
+      if (iNext == -1)
+      {
+        pBlock = pBlock->pNext;
+        continue;
+      }
+
+      if (iNext >= 0 && iNext < pBlock->index)
+      {
+        vcBPAHashMap<HASHKEY, vcBPAVoxel>::HashNode *pNode = pBlock->pBlockData[iNext];
+        pData->hashKey = pNode->hashKey;
+        return pNode;
+      }
+
+      pData->hashKey = 0; // find next avaliable
+      pBlock = pBlock->pNext;
+      continue;
+    }
+
+    vcBPAHashMap<HASHKEY, vcBPAVoxel>::HashNode *pNode = pBlock->pBlockData[0];
+    pData->hashKey = pNode->hashKey;
+    return pNode;
+
+  }
+
+  return NULL;
+}
+
+void ReadVertextData(vcBPAGridHashNode *pOldModelGrid, vcBPAVertex *pPoint, uint32_t vx, uint32_t vy, uint32_t vz, vdkPointBufferF64 *pBuffer, vcVoxelGridHashNode *pNewModelGrid, const uint32_t &displacementOffset, udUInt3 &displacementDistanceOffset)
+{  
+  double distance = FLT_MAX;
+  udDouble3 cloestPoint = {};
+  vcBPATriangle *t = vcBPA_FindClosestTriangle(distance, pOldModelGrid, pPoint->position, vx, vy, vz, &cloestPoint);
+  if (t != nullptr)
+  {
+    udDouble3 normal = vcBPA_GetTriangleNormal(t->vertices[0], t->vertices[1], t->vertices[2]);
+    udDouble3 p0_to_position = pPoint->position - t->vertices[0];
+    if (udDot3(p0_to_position, normal) < 0.0)
+      distance = -distance;
+  } // else new point
+
+  // Position XYZ
+  memcpy(&pBuffer->pPositions[pBuffer->pointCount * 3], &pNewModelGrid->pBuffer->pPositions[pPoint->j * 3], sizeof(double) * 3);
+
+  // Copy all of the original attributes
+  ptrdiff_t pointAttrOffset = ptrdiff_t(pBuffer->pointCount) * pBuffer->attributeStride;
+  for (uint32_t k = 0; k < pNewModelGrid->pBuffer->attributes.count; ++k)
+  {
+    vdkAttributeDescriptor &oldAttrDesc = pNewModelGrid->pBuffer->attributes.pDescriptors[k];
+    uint32_t attributeSize = (oldAttrDesc.typeInfo & (vdkAttributeTypeInfo_SizeMask << vdkAttributeTypeInfo_SizeShift));
+
+    // Get attribute old offset and pointer
+    uint32_t attrOldOffset = 0;
+    if (vdkAttributeSet_GetOffsetOfNamedAttribute(&pNewModelGrid->pBuffer->attributes, oldAttrDesc.name, &attrOldOffset) != vE_Success)
+      continue;
+
+    void *pOldAttr = udAddBytes(pNewModelGrid->pBuffer->pAttributes, (ptrdiff_t)pPoint->j * pNewModelGrid->pBuffer->attributeStride + attrOldOffset);
+
+    // Get attribute new offset and pointer
+    uint32_t attrNewOffset = 0;
+    if (vdkAttributeSet_GetOffsetOfNamedAttribute(&pBuffer->attributes, oldAttrDesc.name, &attrNewOffset) != vE_Success)
+      continue;
+
+    void *pNewAttr = udAddBytes(pBuffer->pAttributes, pointAttrOffset + attrNewOffset);
+
+    // Copy attribute data
+    memcpy(pNewAttr, pOldAttr, attributeSize);
+  }
+
+  // Displacement
+  float *pDisplacement = (float *)udAddBytes(pBuffer->pAttributes, pointAttrOffset + displacementOffset);
+  *pDisplacement = (float)distance;
+
+  for (int elementIndex = 0; elementIndex < 3; ++elementIndex) //X,Y,Z
+  {
+    float *pDisplacementDistance = (float *)udAddBytes(pBuffer->pAttributes, pointAttrOffset + displacementDistanceOffset[elementIndex]);
+    if (distance != FLT_MAX)
+      *pDisplacementDistance = (float)((cloestPoint[elementIndex] - pPoint->position[elementIndex]) / distance);
+    else
+      *pDisplacementDistance = 0.0;
+  }
+}
+
 void vcBPA_ReadGrid(vcBPAConvertItem *pData, vdkPointBufferF64 *pBuffer, uint32_t displacementOffset, udUInt3 displacementDistanceOffset)
 {
   static int tcount = 0;
   vcVoxelGridHashNode *pNewModelGrid = pData->activeItem.pNewModelGrid;
-  vcBPAGridHashNode *pOldModelGrid = pData->activeItem.pOldModelGrid;
-  if (pData->ppVertex == nullptr)
+  vcBPAGridHashNode *pOldModelGrid = pData->activeItem.pOldModelGrid;  
+
+  while (pBuffer->pointCount < pBuffer->pointsAllocated)
   {
-    vcBPAVoxel *pVoxel = nullptr;
-    while (pVoxel == nullptr)
-    {
-      pVoxel = pNewModelGrid->voxelHashMap.FindData(pData->v.x, pData->v.y, pData->v.z);
-      ++pData->v.z;
-      if (pData->v.z == pNewModelGrid->vzSize)
+    if (pData->ppVertex == nullptr)
+    {      
+      vcBPAHashMap<HASHKEY, vcBPAVoxel>::HashNode *pNode = FindNextNode(pData);
+      if (pNode == nullptr)
       {
-        pData->v.z = 0;
-        ++pData->v.y;
-        if (pData->v.y == pNewModelGrid->vySize)
-        {
-          pData->v.y = 0;
-          pData->v.x++;
-          if (pData->v.x == pNewModelGrid->vxSize)
-            break;
-        }
-      }
+        assert(pData->hashIndex == HASH_ARRAY_LEN);
+        printf("read end. \n");
+        return;
+      } 
+      assert(pData->hashKey > 0);
+      vcBPAVoxel &voxel = pNode->data;
+      pData->ppVertex = udAllocType(vcBPAVertex *, voxel.pointNum, udAF_Zero);
+      voxel.ToArray(pData->ppVertex);
+      pData->pointIndex = 0;
+      pData->arrayLength = voxel.pointNum;
     }
 
-    if (pVoxel == nullptr)
-    {
-      printf("doone. \n");
+    if (pData->ppVertex == nullptr)
+    {      
+      printf("memory run out. \n");
       return;
-    }      
-
-    pData->ppVertex = udAllocType(vcBPAVertex *, pVoxel->pointNum, udAF_Zero);
-    pVoxel->ToArray(pData->ppVertex);
-    pData->pointIndex = 0;
-    pData->arrayLength = pVoxel->pointNum;
-  }
-
-  while(pData->pointIndex < pData->arrayLength)
-  {
-    vcBPAVertex *pPoint = pData->ppVertex[pData->pointIndex++];
-
-    double distance = FLT_MAX;
-    udDouble3 cloestPoint = {};
-    vcBPATriangle *t = vcBPA_FindClosestTriangle(distance, pOldModelGrid, pPoint->position, pData->v.x, pData->v.y, pData->v.z, &cloestPoint);
-
-    if (t != nullptr)
-    {
-      // new point
-      udDouble3 normal = vcBPA_GetTriangleNormal(t->vertices[0], t->vertices[1], t->vertices[2]);
-      udDouble3 p0_to_position = pPoint->position - t->vertices[0];
-      if (udDot3(p0_to_position, normal) < 0.0)
-        distance = -distance;
     }
 
-    // Position XYZ
-    memcpy(&pBuffer->pPositions[pBuffer->pointCount * 3], &pNewModelGrid->pBuffer->pPositions[pPoint->j * 3], sizeof(double) * 3);
+    uint32_t vx = GET_X(pData->hashKey);
+    uint32_t vy = GET_Y(pData->hashKey);
+    uint32_t vz = GET_Z(pData->hashKey);
 
-    // Copy all of the original attributes
-    ptrdiff_t pointAttrOffset = ptrdiff_t(pBuffer->pointCount) * pBuffer->attributeStride;
-    for (uint32_t k = 0; k < pNewModelGrid->pBuffer->attributes.count; ++k)
+    //printf("vcBPA_ReadGrid(%d,%d,%d). \n", vx, vy, vz);
+
+    while (pData->pointIndex < pData->arrayLength)
     {
-      vdkAttributeDescriptor &oldAttrDesc = pNewModelGrid->pBuffer->attributes.pDescriptors[k];
-      uint32_t attributeSize = (oldAttrDesc.typeInfo & (vdkAttributeTypeInfo_SizeMask << vdkAttributeTypeInfo_SizeShift));
+      vcBPAVertex *pPoint = pData->ppVertex[pData->pointIndex++];
+      ReadVertextData(pOldModelGrid, pPoint, vx, vy, vz, pBuffer, pNewModelGrid, displacementOffset, displacementDistanceOffset);
 
-      // Get attribute old offset and pointer
-      uint32_t attrOldOffset = 0;
-      if (vdkAttributeSet_GetOffsetOfNamedAttribute(&pNewModelGrid->pBuffer->attributes, oldAttrDesc.name, &attrOldOffset) != vE_Success)
-        continue;
+      ++pBuffer->pointCount;
+      ++tcount;
+      --pData->activeItem.leftPoint;
 
-      void *pOldAttr = udAddBytes(pNewModelGrid->pBuffer->pAttributes, k * pNewModelGrid->pBuffer->attributeStride + attrOldOffset);
+      if (pBuffer->pointCount == pBuffer->pointsAllocated)
+      {
+        printf("vcBPA_ReadGrid finish reading %d. total write count: %d\n", pBuffer->pointsAllocated, tcount);
+        break;
+      }
 
-      // Get attribute new offset and pointer
-      uint32_t attrNewOffset = 0;
-      if (vdkAttributeSet_GetOffsetOfNamedAttribute(&pBuffer->attributes, oldAttrDesc.name, &attrNewOffset) != vE_Success)
-        continue;
-
-      void *pNewAttr = udAddBytes(pBuffer->pAttributes, pointAttrOffset + attrNewOffset);
-
-      // Copy attribute data
-      memcpy(pNewAttr, pOldAttr, attributeSize);
+      if (pData->activeItem.leftPoint == 0) // stop search
+        return;
     }
 
-    // Displacement
-    float *pDisplacement = (float *)udAddBytes(pBuffer->pAttributes, pointAttrOffset + displacementOffset);
-    *pDisplacement = (float)distance;
-
-    for (int elementIndex = 0; elementIndex < 3; ++elementIndex) //X,Y,Z
+    if (pData->pointIndex == pData->arrayLength)
     {
-      float *pDisplacementDistance = (float *)udAddBytes(pBuffer->pAttributes, pointAttrOffset + displacementDistanceOffset[elementIndex]);
-      if (distance != FLT_MAX)
-        *pDisplacementDistance = (float)((cloestPoint[elementIndex] - pPoint->position[elementIndex]) / distance);
-      else
-        *pDisplacementDistance = 0.0;
+      //printf("vcBPA_ReadGrid finish arrayLength %d. total write count: %d\n", pData->arrayLength, tcount);
+      udFree(pData->ppVertex);
+      pData->pointIndex = 0;
+      pData->arrayLength = 0;
     }
-
-    ++pBuffer->pointCount;
-    ++tcount;
-    --pData->activeItem.leftPoint;
-    
-    if (pData->activeItem.leftPoint == 0)
-      break;
-
-    if (pBuffer->pointCount == pBuffer->pointsAllocated)
-    {
-      printf("vcBPA_ReadGrid finish reading once of %d allocated. total write count: %d\n", pBuffer->pointsAllocated, tcount);
-      break;
-    }      
   } 
-
-  if (pData->pointIndex == pData->arrayLength)
-  {
-    udFree(pData->ppVertex);
-    pData->pointIndex = 0;
-    pData->arrayLength = 0;
-  }
 
 }
 
+static std::ofstream fw("write.txt", std::ofstream::out);
 vdkError vcBPA_ConvertReadPoints(vdkConvertCustomItem *pConvertInput, vdkPointBufferF64 *pBuffer)
 {
   printf("vcBPA_ConvertReadPoints called, pBuffer->pointsAllocated %d\n", pBuffer->pointsAllocated);
@@ -1982,7 +2050,13 @@ vdkError vcBPA_ConvertReadPoints(vdkConvertCustomItem *pConvertInput, vdkPointBu
   vcBPAConvertItem *pData = (vcBPAConvertItem *)pConvertInput->pData;
   pBuffer->pointCount = 0;
   if (pData->running.Get() == vcBPARS_Success)
+  {
+    fw << "done." << std::endl;
+    fw.flush();
+    fw.close();
     return vE_Success;
+  }
+    
 
   uint32_t displacementOffset = 0;
   udUInt3 displacementDistanceOffset = {};
@@ -2014,14 +2088,45 @@ vdkError vcBPA_ConvertReadPoints(vdkConvertCustomItem *pConvertInput, vdkPointBu
       // done
       if (pData->activeItem.pNewModelGrid == nullptr)
       {
+        fw << "to end." << std::endl;
         printf("done. last write: %d\n", pBuffer->pointCount);
         pData->CleanReadData();
         pData->running.Set(vcBPARS_Success);
         return vE_Success;
       }
 
+      fw << "read grid." << std::endl;
       printf("vcBPA_ConvertReadPoints new grid %d to read. \n", pData->activeItem.leftPoint);
-      pData->v = udUInt3::zero();
+      while (pData->hashIndex < HASH_ARRAY_LEN)
+      {
+        vcBPAHashMap<HASHKEY, vcBPAVoxel>::HashNodeBlock *pBlock = pData->activeItem.pNewModelGrid->voxelHashMap.pArray[pData->hashIndex];
+        if (pBlock != nullptr)
+        {
+          vcBPAHashMap<HASHKEY, vcBPAVoxel>::HashNode *pNode = pBlock->pBlockData[0];
+          if (pNode != nullptr)
+          {
+            pData->hashKey = pNode->hashKey;
+
+            vcBPAVoxel &voxel = pNode->data;            
+            pData->ppVertex = udAllocType(vcBPAVertex *, voxel.pointNum, udAF_Zero);
+            voxel.ToArray(pData->ppVertex);
+            pData->pointIndex = 0;
+            pData->arrayLength = voxel.pointNum;
+            printf("vcBPA_ConvertReadPoints new voxel %d to read. \n", voxel.pointNum);
+            break;
+          }
+        }
+        ++pData->hashIndex;
+      }
+
+      if (pData->hashIndex == HASH_ARRAY_LEN)
+      {
+        printf("read new grid error. \n");
+        pData->CleanReadData();
+        pData->running.Set(vcBPARS_Failed);
+        return vE_Failure;
+      }
+
     }
 
     vcBPA_ReadGrid(pData, pBuffer, displacementOffset, displacementDistanceOffset);
