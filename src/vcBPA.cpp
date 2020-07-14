@@ -23,7 +23,7 @@
 #if LOW_MEMORY
 // for data structure
 typedef uint8_t TINDEX; // max 255, needs bigger than BLOCK_SIZE
-static const uint32_t BLOCK_SIZE = 32; // 1 << 7
+static const uint32_t BLOCK_SIZE = 64;
 static const uint32_t HASH_ARRAY_LEN = 4096; // (1111 1111 1111) + 1, 4 bits for x/y/z
 static const uint32_t HASH_ARRAY_MASK = 15; // 1111
 #define GET_HASHINDEX(x, y, z) (((uint32_t)(x) & HASH_ARRAY_MASK) << 6 | ((uint32_t)(y) & HASH_ARRAY_MASK) << 3 | ((uint32_t)(z) & HASH_ARRAY_MASK) )
@@ -32,7 +32,7 @@ static const uint32_t HASH_ARRAY_MASK = 15; // 1111
 typedef uint32_t HASHKEY;
 static const uint32_t BPA_LEVEL_LEN = 512; // max voxel (1<<10) supported by uint32.
 static const uint32_t BPA_LEVEL_MASK = 511; // max voxel index (1<<10 - 1) (11 1111 1111)supported by uint32.
-static const uint32_t MAX_POINTNUM = 1 << 25; // can read maximum 33,554,432 points in cube(2r*2r*2r*LEVEL_LEN*LEVEL_LEN*LEVEL_LEN)meter
+static const uint32_t MAX_POINTNUM = 1 << 25; // can read maximum 4,194,304 points in cube(2r*2r*2r*BPA_LEVEL_LEN*BPA_LEVEL_LEN*BPA_LEVEL_LEN)meter
 #define GET_HASHKEY(x, y, z) (((uint32_t)(x) & BPA_LEVEL_MASK) << 20 | ((uint32_t)(y) & BPA_LEVEL_MASK) << 10 | ((uint32_t)(z) & BPA_LEVEL_MASK) )
 #define GET_X(code) ( ((HASHKEY)(code) >> 20) & BPA_LEVEL_MASK )
 #define GET_Y(code) ( ((HASHKEY)(code) >> 10) & BPA_LEVEL_MASK )
@@ -1217,6 +1217,7 @@ struct vcBPAConvertItem
   vcConvertItem *pConvertItem;
   double gridSize;
   double ballRadius;
+  int32_t voxelOffset;
 
   udSafeDeque<vcBPAConvertItemData> *pConvertItemData;
   vcBPAConvertItemData activeItem;
@@ -1570,6 +1571,11 @@ void vcBPA_RunGridPopulation(void *pDataPtr, const vcBPAData &data, vdkAttribute
   {
     vdkPointBufferF64_Destroy(&pBuffer);
 
+    while (pData->pConvertItemData->chunkedArray.length > 20)
+    {
+      udSleep(100);
+    }
+
     vcBPAConvertItemData item = {};
     item.pManifold = pData->pManifold;
     item.pNewModelGrid = pNewModelGrid;
@@ -1658,12 +1664,12 @@ uint32_t vcBPA_ProcessThread(void *pDataPtr)
   // data from new model
   vdkPointCloudHeader header = {};
   vdkPointCloud_GetHeader(pData->pNewModel, &header);
-  udDouble4x4 m_sceneMatrix = udDouble4x4::create(header.storedMatrix);
+  udDouble4x4 storedMatrix = udDouble4x4::create(header.storedMatrix);
   udDouble3 localZero = udDouble3::create(header.boundingBoxCenter[0] - header.boundingBoxExtents[0], header.boundingBoxCenter[1] - header.boundingBoxExtents[1], header.boundingBoxCenter[2] - header.boundingBoxExtents[2]);
   udDouble3 unitSpaceExtents = udDouble3::create(header.boundingBoxExtents[0] * 2, header.boundingBoxExtents[1] * 2, header.boundingBoxExtents[2] * 2);
-  udDouble3 newModelExtents = unitSpaceExtents * udDouble3::create(udMag3(m_sceneMatrix.axis.x), udMag3(m_sceneMatrix.axis.y), udMag3(m_sceneMatrix.axis.z));
-  udDouble3 newModelZero = (m_sceneMatrix * udDouble4::create(localZero, 1.0)).toVector3();
-  udDouble3 newModelCenter = (m_sceneMatrix * udDouble4::create(header.boundingBoxCenter[0], header.boundingBoxCenter[1], header.boundingBoxCenter[2], 1.0)).toVector3();
+  udDouble3 newModelExtents = unitSpaceExtents * udDouble3::create(udMag3(storedMatrix.axis.x), udMag3(storedMatrix.axis.y), udMag3(storedMatrix.axis.z));
+  udDouble3 newModelZero = (storedMatrix * udDouble4::create(localZero, 1.0)).toVector3();
+  udDouble3 newModelCenter = (storedMatrix * udDouble4::create(header.boundingBoxCenter[0], header.boundingBoxCenter[1], header.boundingBoxCenter[2], 1.0)).toVector3();
 
   std::ofstream outputFile("output.txt", std::ofstream::out);
 
@@ -1678,7 +1684,10 @@ uint32_t vcBPA_ProcessThread(void *pDataPtr)
 
     pData->running.Set(vcBPARS_Failed);
     return 0;
-  } 
+  }
+
+  double voxelOffset = 0.5 / pData->pManifold->voxelSize;
+  pData->voxelOffset = (int32_t)voxelOffset;
 
   uint32_t gridXSize = (uint32_t)((newModelExtents.x + pData->pManifold->baseGridSize - UD_EPSILON) / pData->pManifold->baseGridSize);
   uint32_t gridYSize = (uint32_t)((newModelExtents.y + pData->pManifold->baseGridSize - UD_EPSILON) / pData->pManifold->baseGridSize);
@@ -1727,12 +1736,8 @@ uint32_t vcBPA_ProcessThread(void *pDataPtr)
         // Don't descend if there's no data        
         vcBPA_QueryPoints(pData->pManifold->pContext, pData->pNewModel, &center.x, &halfSize.x, pBuffer);        
         if (0 == pBuffer->pointCount)
-        {
-          printf("no points \n");
-          outputFile << "no points \n";
-          outputFile.flush();
           continue;
-        }          
+       
 
         // run grid BPA
         vcBPAData data;
@@ -1805,22 +1810,20 @@ vdkError vcBPA_ConvertOpen(vdkConvertCustomItem *pConvertInput, uint32_t everyNt
   return vE_Success;
 }
 
-vcBPATriangle *vcBPA_FindClosestTriangle(double &minDistance, vcBPAGridHashNode *pGrid, udDouble3 &position, uint32_t x, uint32_t y, uint32_t z, udDouble3 *cloestPoint)
+void vcBPA_FindNearByTriangle(udChunkedArray<vcBPATriangle> &triangles, vcBPAGridHashNode *pGrid, uint32_t x, uint32_t y, uint32_t z, int32_t voffset)
 {
   if (pGrid == nullptr)
-    return nullptr;
+    return;
 
   int32_t vcx = (int32_t)x;
   int32_t vcy = (int32_t)y;
   int32_t vcz = (int32_t)z;
 
-  vcBPATriangle *find = nullptr;
-
-  for (int32_t vx = udMax(vcx - 1, 0); vx <= udMin(vcx + 1, pGrid->vxSize - 1); vx++)
+  for (int32_t vx = udMax(vcx - voffset, 0); vx <= udMin(vcx + voffset, pGrid->vxSize - 1); vx++)
   {
-    for (int32_t vy = udMax(vcy - 1, 0); vy <= udMin(vcy + 1, pGrid->vySize - 1); vy++)
+    for (int32_t vy = udMax(vcy - voffset, 0); vy <= udMin(vcy + voffset, pGrid->vySize - 1); vy++)
     {
-      for (int32_t vz = udMax(vcz - 1, 0); vz <= udMin(vcz + 1, pGrid->vzSize - 1); vz++)
+      for (int32_t vz = udMax(vcz - voffset, 0); vz <= udMin(vcz + voffset, pGrid->vzSize - 1); vz++)
       {
         vcBPATriangleArray *pVoxel = pGrid->triangleHashMap.FindData(vx, vy, vz);
         if (pVoxel == nullptr)
@@ -1832,13 +1835,7 @@ vcBPATriangle *vcBPA_FindClosestTriangle(double &minDistance, vcBPAGridHashNode 
         {
           for (int i = 0; i <= pArray->index; i++)
           {
-            vcBPATriangle *t = &pArray->pBlockData[i];
-            double distance = udDistanceToTriangle(t->vertices[0], t->vertices[1], t->vertices[2], position, cloestPoint);
-            if (distance < minDistance)
-            {
-              find = t;
-              minDistance = distance;
-            }
+            triangles.PushBack(pArray->pBlockData[i]);
           }
           pArray = pArray->pNext;
         }
@@ -1846,7 +1843,6 @@ vcBPATriangle *vcBPA_FindClosestTriangle(double &minDistance, vcBPAGridHashNode 
     }
   }
 
-  return find;
 }
 
 void vcBPA_WaitNextGrid(vcBPAConvertItem *pData)
@@ -1869,6 +1865,7 @@ void vcBPA_WaitNextGrid(vcBPAConvertItem *pData)
 
 vcBPAHashMap<HASHKEY, vcBPAVoxel>::HashNode *FindNextNode(vcBPAConvertItem *pData)
 {
+  bool useNext = false;
   vcBPAHashMap<HASHKEY, vcBPAVoxel>::HashNodeBlock *pBlock = pData->activeItem.pNewModelGrid->voxelHashMap.pArray[pData->hashIndex];
   while (pData->hashIndex < HASH_ARRAY_LEN)
   {
@@ -1879,7 +1876,7 @@ vcBPAHashMap<HASHKEY, vcBPAVoxel>::HashNode *FindNextNode(vcBPAConvertItem *pDat
         continue;
     }
 
-    if (pData->hashKey > 0)
+    if (!useNext)
     {
       int32_t iNext = -1;
       for (TINDEX i = 0; i < pBlock->index; i++)
@@ -1906,7 +1903,7 @@ vcBPAHashMap<HASHKEY, vcBPAVoxel>::HashNode *FindNextNode(vcBPAConvertItem *pDat
         return pNode;
       }
 
-      pData->hashKey = 0; // find next avaliable
+      useNext = true; // find next avaliable
       pBlock = pBlock->pNext;
       continue;
     }
@@ -1920,18 +1917,49 @@ vcBPAHashMap<HASHKEY, vcBPAVoxel>::HashNode *FindNextNode(vcBPAConvertItem *pDat
   return NULL;
 }
 
-void ReadVertextData(vcBPAGridHashNode *pOldModelGrid, vcBPAVertex *pPoint, uint32_t vx, uint32_t vy, uint32_t vz, vdkPointBufferF64 *pBuffer, vcVoxelGridHashNode *pNewModelGrid, const uint32_t &displacementOffset, udUInt3 &displacementDistanceOffset)
-{  
-  double distance = FLT_MAX;
-  udDouble3 cloestPoint = {};
-  vcBPATriangle *t = vcBPA_FindClosestTriangle(distance, pOldModelGrid, pPoint->position, vx, vy, vz, &cloestPoint);
-  if (t != nullptr)
+double vcBPA_SignedDistanceToTriangle(const udDouble3& v0, const udDouble3 &v1, const udDouble3 &v2, udDouble3 position, udDouble3 *pPoint)
+{
+  double distance = udDistanceToTriangle(v0, v1, v2, position, pPoint);
+  udDouble3 normal = vcBPA_GetTriangleNormal(v0, v1, v2);
+  udDouble3 p0_to_position = position - v0;
+  if (udDot3(p0_to_position, normal) < 0.0)
+    distance = -distance;
+  return distance;
+}
+
+double vcBPA_FindClosestTriangle(udChunkedArray<vcBPATriangle> &triangles, const udDouble3 &position, udDouble3 *trianglePoint)
+{
+  double closestDistance = FLT_MAX;
+  udDouble3 nearestPoint = {};
+  size_t index = 0;
+  for (size_t i = 0; i < triangles.length; i++)
   {
-    udDouble3 normal = vcBPA_GetTriangleNormal(t->vertices[0], t->vertices[1], t->vertices[2]);
-    udDouble3 p0_to_position = pPoint->position - t->vertices[0];
-    if (udDot3(p0_to_position, normal) < 0.0)
-      distance = -distance;
-  } // else new point
+    vcBPATriangle &t = triangles[i];
+    udDouble3 p;
+    double d = vcBPA_SignedDistanceToTriangle(t.vertices[0], t.vertices[1], t.vertices[2], position, &p);
+    if (d < closestDistance)
+    {
+      index = i;
+      nearestPoint = p;
+      closestDistance = d;
+    }      
+  }
+
+  if (index < triangles.length)
+  {
+    *trianglePoint = nearestPoint;
+    return closestDistance;
+  }
+
+  return FLT_MAX;
+}
+
+void vcBPA_ReadVertextData(vcBPAVertex *pPoint, udChunkedArray<vcBPATriangle> &triangles, vdkPointBufferF64 *pBuffer, vcVoxelGridHashNode *pNewModelGrid, const uint32_t &displacementOffset, udUInt3 &displacementDistanceOffset)
+{
+  // to find cloest triangle
+  const udDouble3 &position = pPoint->position;
+  udDouble3 trianglePoint = {};
+  double distance = vcBPA_FindClosestTriangle(triangles, position, &trianglePoint);
 
   // Position XYZ
   memcpy(&pBuffer->pPositions[pBuffer->pointCount * 3], &pNewModelGrid->pBuffer->pPositions[pPoint->j * 3], sizeof(double) * 3);
@@ -1969,7 +1997,7 @@ void ReadVertextData(vcBPAGridHashNode *pOldModelGrid, vcBPAVertex *pPoint, uint
   {
     float *pDisplacementDistance = (float *)udAddBytes(pBuffer->pAttributes, pointAttrOffset + displacementDistanceOffset[elementIndex]);
     if (distance != FLT_MAX)
-      *pDisplacementDistance = (float)((cloestPoint[elementIndex] - pPoint->position[elementIndex]) / distance);
+      *pDisplacementDistance = (float)((trianglePoint[elementIndex] - position[elementIndex]) / distance);
     else
       *pDisplacementDistance = 0.0;
   }
@@ -1992,7 +2020,7 @@ void vcBPA_ReadGrid(vcBPAConvertItem *pData, vdkPointBufferF64 *pBuffer, uint32_
         printf("read end. \n");
         return;
       } 
-      assert(pData->hashKey > 0);
+      assert(pData->hashKey >= 0);
       vcBPAVoxel &voxel = pNode->data;
       pData->ppVertex = udAllocType(vcBPAVertex *, voxel.pointNum, udAF_Zero);
       voxel.ToArray(pData->ppVertex);
@@ -2010,12 +2038,22 @@ void vcBPA_ReadGrid(vcBPAConvertItem *pData, vdkPointBufferF64 *pBuffer, uint32_
     uint32_t vy = GET_Y(pData->hashKey);
     uint32_t vz = GET_Z(pData->hashKey);
 
-    //printf("vcBPA_ReadGrid(%d,%d,%d). \n", vx, vy, vz);
+    udChunkedArray<vcBPATriangle> triangles;
+    triangles.Init(32);
+    int voxelMove = 1;   
+    while (triangles.length == 0)
+    {
+      vcBPA_FindNearByTriangle(triangles, pOldModelGrid, vx, vy, vz, 1);
+      voxelMove += pData->voxelOffset/3;
+      if (voxelMove >= pData->voxelOffset)
+        break;
+    }
 
+    //printf("vcBPA_ReadGrid arrayLength:%d nearby triangles: %d. \n", pData->arrayLength, (int)triangles.length);
     while (pData->pointIndex < pData->arrayLength)
     {
       vcBPAVertex *pPoint = pData->ppVertex[pData->pointIndex++];
-      ReadVertextData(pOldModelGrid, pPoint, vx, vy, vz, pBuffer, pNewModelGrid, displacementOffset, displacementDistanceOffset);
+      vcBPA_ReadVertextData(pPoint, triangles, pBuffer, pNewModelGrid, displacementOffset, displacementDistanceOffset);
 
       ++pBuffer->pointCount;
       ++tcount;
@@ -2031,6 +2069,7 @@ void vcBPA_ReadGrid(vcBPAConvertItem *pData, vdkPointBufferF64 *pBuffer, uint32_
         return;
     }
 
+    triangles.Deinit();
     if (pData->pointIndex == pData->arrayLength)
     {
       //printf("vcBPA_ReadGrid finish arrayLength %d. total write count: %d\n", pData->arrayLength, tcount);
