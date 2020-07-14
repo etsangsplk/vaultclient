@@ -68,6 +68,9 @@ public:
       if (ImGui::Checkbox(udTempStr("%s##POIShowAllLengths%zu", vcString::Get("scenePOILineShowAllLengths"), itemID), &m_pParent->m_showAllLengths))
         vdkProjectNode_SetMetadataBool(m_pParent->m_pNode, "showAllLengths", m_pParent->m_showAllLengths);
 
+      if (ImGui::Checkbox(udTempStr("%s##POIShowAngles%zu", vcString::Get("scenePOILineShowAngles"), itemID), &m_pParent->m_showAngles))
+        vdkProjectNode_SetMetadataBool(m_pParent->m_pNode, "showAngles", m_pParent->m_showAngles);
+
       if (ImGui::Checkbox(udTempStr("%s##POIShowArea%zu", vcString::Get("scenePOILineShowArea"), itemID), &m_pParent->m_showArea))
         vdkProjectNode_SetMetadataBool(m_pParent->m_pNode, "showArea", m_pParent->m_showArea);
 
@@ -487,7 +490,8 @@ vcPOI::vcPOI(vcProject *pProject, vdkProjectNode *pNode, vcState *pProgramState)
 
   m_showArea = false;
   m_showLength = false;
-  m_lengthLabels.Init(32);
+  m_showAngles = false;
+  m_labels.Init(32);
 
   memset(&m_line, 0, sizeof(m_line));
 
@@ -768,9 +772,9 @@ void vcPOI::UpdatePoints(vcState *pProgramState)
   m_pLabelInfo->backColourRGBA = vcIGSW_BGRAToRGBAUInt32(m_backColour);
   m_pLabelInfo->pSceneItem = this;
 
-  for (size_t i = 0; i < m_lengthLabels.length; ++i)
+  for (size_t i = 0; i < m_labels.length; ++i)
   {
-    vcLabelInfo* pLabel = m_lengthLabels.GetElement(i);
+    vcLabelInfo* pLabel = m_labels.GetElement(i);
     pLabel->textColourRGBA = vcIGSW_BGRAToRGBAUInt32(m_nameColour);
     pLabel->backColourRGBA = vcIGSW_BGRAToRGBAUInt32(m_backColour);
     pLabel->pSceneItem = this;
@@ -1020,13 +1024,13 @@ void vcPOI::Cleanup(vcState *pProgramState)
 {
   udFree(m_line.pPoints);
   udFree(m_pLabelText);
-  for (size_t i = 0; i < m_lengthLabels.length; ++i)
-    udFree(m_lengthLabels.GetElement(i)->pText);
+  for (size_t i = 0; i < m_labels.length; ++i)
+    udFree(m_labels.GetElement(i)->pText);
 
   udFree(m_attachment.pPathLoaded);
   vcPolygonModel_Destroy(&m_attachment.pModel);
 
-  m_lengthLabels.Deinit();
+  m_labels.Deinit();
   vcPolygonModel_Destroy(&m_pPolyModel);
   vcFenceRenderer_Destroy(&m_pFence);
   vcLineRenderer_DestroyLine(&m_pLine);
@@ -1137,21 +1141,21 @@ void vcPOI::AddLengths(const vcUnitConversionData *pConversionData)
 
     if (m_line.numPoints > 1)
     {
-      int numLabelDiff = m_line.numPoints - (int)m_lengthLabels.length;
+      int numLabelDiff = m_line.numPoints - (int)m_labels.length;
       if (numLabelDiff < 0) // Too many labels, delete one
       {
         vcLabelInfo popLabel = {};
-        m_lengthLabels.PopBack(&popLabel);
+        m_labels.PopBack(&popLabel);
         udFree(popLabel.pText);
       }
       else if (numLabelDiff > 0) // Not enough labels, add one
       {
         vcLabelInfo label = vcLabelInfo(*m_pLabelInfo);
         label.pText = nullptr;
-        m_lengthLabels.PushBack(label);
+        m_labels.PushBack(label);
       }
 
-      vcLabelInfo* pLabel = m_lengthLabels.GetElement(i);
+      vcLabelInfo* pLabel = m_labels.GetElement(i);
       pLabel->worldPosition = (m_line.pPoints[j] + m_line.pPoints[i]) / 2;
 
       char buffer[128] = {};
@@ -1160,6 +1164,44 @@ void vcPOI::AddLengths(const vcUnitConversionData *pConversionData)
     }
 
     j = i;
+  }
+}
+
+void vcPOI::AddAngles(const vcUnitConversionData *pConversionData)
+{
+  if (m_line.numPoints < 3)
+    return;
+
+  int pivot = 1;
+  int next = 2;
+  for (int prev = 0; prev < m_line.numPoints; prev++)
+  {
+    udDouble3 vPrev = m_line.pPoints[prev] - m_line.pPoints[pivot];
+    udDouble3 vNext = m_line.pPoints[next] - m_line.pPoints[pivot];
+
+    double vPrevMag = udMag3(vPrev);
+    double vNextMag = udMag3(vNext);
+    double angle = 0.0;
+
+    if (vPrevMag != 0.0 && vNextMag != 0.0)
+    {
+      vPrev /= vPrevMag;
+      vNext /= vNextMag;
+
+      angle = udACos(udDot(vPrev, vNext));
+    }
+
+    //vcLabelInfo *pLabel = m_labels.GetElement(i);
+    //pLabel->worldPosition = (m_line.pPoints[j] + m_line.pPoints[i]) / 2;
+    //
+    //char buffer[128] = {};
+    //vcUnitConversion_ConvertAndFormatDistance(buffer, 128, lineLength, vcDistance_Metres, pConversionData);
+    //udSprintf(&pLabel->pText, "%s", buffer);
+
+    pivot = next;
+    next++;
+    if (next == m_line.numPoints)
+      next = 0;
   }
 }
 
@@ -1234,15 +1276,18 @@ void vcPOI::AddLabelsToScene(vcRenderData *pRenderData, const vcUnitConversionDa
 {
   if (m_pLabelInfo != nullptr)
   {
+    //Clear m_lables...
+
     if (m_showAllLengths && m_line.numPoints > 1)
-    {
       AddLengths(pConversionData);
 
-      for (size_t i = 0; i < m_lengthLabels.length; ++i)
-      {
-        if (m_line.closed || i > 0)
-          pRenderData->labels.PushBack(m_lengthLabels.GetElement(i));
-      }
+    if (m_showAngles && m_line.numPoints > 2)
+      AddAngles(pConversionData);
+
+    for (size_t i = 0; i < m_labels.length; ++i)
+    {
+      //if (m_line.closed || i > 0)
+        pRenderData->labels.PushBack(m_labels.GetElement(i));
     }
 
     if ((m_showLength && m_line.numPoints > 1) || (m_showArea && m_line.numPoints > 2))
