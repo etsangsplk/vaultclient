@@ -59,6 +59,8 @@ void vcI3S::AddToScene(vcState * /*pProgramState*/, vcRenderData *pRenderData)
   instance.worldMat = m_sceneMatrix;
   instance.pSceneItem = this;
   instance.sceneItemInternalId = 0; // TODO: individual node picking
+  instance.selectable = true;
+  instance.tint = udFloat4::one();
 
   pRenderData->polyModels.PushBack(instance);
 }
@@ -68,7 +70,7 @@ void vcI3S::ApplyDelta(vcState * /*pProgramState*/, const udDouble4x4 &delta)
   m_sceneMatrix = delta * m_sceneMatrix;
 }
 
-void vcI3S::HandleImGui(vcState * /*pProgramState*/, size_t * /*pItemID*/)
+void vcI3S::HandleSceneExplorerUI(vcState * /*pProgramState*/, size_t * /*pItemID*/)
 {
   ImGui::TextWrapped("Path: %s", m_pNode->pURI);
 }

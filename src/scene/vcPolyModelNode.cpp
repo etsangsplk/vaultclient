@@ -103,6 +103,8 @@ void vcPolyModelNode::AddToScene(vcState * /*pProgramState*/, vcRenderData *pRen
   pModel->pSceneItem = this;
   pModel->worldMat = m_matrix;
   pModel->cullFace = m_cullFace;
+  pModel->selectable = true;
+  pModel->tint = udFloat4::one();
   if (m_ignoreTint)
     pModel->renderFlags = vcRenderPolyInstance::RenderFlags_IgnoreTint;
 }
@@ -129,7 +131,7 @@ void vcPolyModelNode::ApplyDelta(vcState *pProgramState, const udDouble4x4 &delt
   vdkProjectNode_SetMetadataDouble(m_pNode, "transform.scale.z", scale.z);
 }
 
-void vcPolyModelNode::HandleImGui(vcState *pProgramState, size_t *pItemID)
+void vcPolyModelNode::HandleSceneExplorerUI(vcState *pProgramState, size_t *pItemID)
 {
   ImGui::TextWrapped("Path: %s", m_pNode->pURI);
 
@@ -154,7 +156,12 @@ void vcPolyModelNode::HandleImGui(vcState *pProgramState, size_t *pItemID)
     bool repackMatrix = false;
     ImGui::InputScalarN(vcString::Get("sceneModelPosition"), ImGuiDataType_Double, &position.x, 3);
     if (ImGui::IsItemDeactivatedAfterEdit())
+    {
       repackMatrix = true;
+      static udDouble3 minDouble = udDouble3::create(-1e7, -1e7, -1e7);
+      static udDouble3 maxDouble = udDouble3::create(1e7, 1e7, 1e7);
+      position = udClamp(position, minDouble, maxDouble);
+    }
 
     udDouble3 eulerRotation = UD_RAD2DEG(orientation.eulerAngles());
     ImGui::InputScalarN(vcString::Get("sceneModelRotation"), ImGuiDataType_Double, &eulerRotation.x, 3);

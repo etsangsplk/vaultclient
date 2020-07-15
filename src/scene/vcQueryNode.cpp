@@ -98,6 +98,7 @@ void vcQueryNode::AddToScene(vcState *pProgramState, vcRenderData *pRenderData)
     pInstance->pSceneItem = this;
     pInstance->renderFlags = vcRenderPolyInstance::RenderFlags_Transparent;
     pInstance->tint = udFloat4::create(1.0f, 1.0f, 1.0f, 0.65f);
+    pInstance->selectable = false;
   }
 
   if (m_pFilter != nullptr)
@@ -123,7 +124,7 @@ void vcQueryNode::ApplyDelta(vcState *pProgramState, const udDouble4x4 &delta)
   vdkProjectNode_SetMetadataDouble(m_pNode, "transform.rotation.r", m_ypr.z);
 }
 
-void vcQueryNode::HandleImGui(vcState *pProgramState, size_t *pItemID)
+void vcQueryNode::HandleSceneExplorerUI(vcState *pProgramState, size_t *pItemID)
 {
   bool changed = false;
 
@@ -178,6 +179,12 @@ void vcQueryNode::HandleImGui(vcState *pProgramState, size_t *pItemID)
 
     //TODO: Save extents and rotation
   }
+}
+
+void vcQueryNode::HandleSceneEmbeddedUI(vcState * /*pProgramState*/)
+{
+  if (ImGui::Checkbox(udTempStr("%s##EmbeddedUI", vcString::Get("sceneFilterInverted")), &m_inverted))
+    vdkQueryFilter_SetInverted(m_pFilter, m_inverted);
 }
 
 void vcQueryNode::ChangeProjection(const udGeoZone &newZone)

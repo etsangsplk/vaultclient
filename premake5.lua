@@ -11,7 +11,7 @@ end
 
 filter { "system:ios", "action:xcode4" }
 	xcodebuildsettings {
-		['PRODUCT_BUNDLE_IDENTIFIER'] = 'Euclideon Vault Client',
+		['PRODUCT_BUNDLE_IDENTIFIER'] = 'Euclideon udStream',
 		["CODE_SIGN_IDENTITY[sdk=iphoneos*]"] = "iPhone Developer",
 		['IPHONEOS_DEPLOYMENT_TARGET'] = '10.3',
 		['SDKROOT'] = 'iphoneos',
@@ -198,7 +198,7 @@ if _ACTION == "xcode4" and os.target() == premake.MACOSX then
 	_OPTIONS["fbxsdk"] = _OPTIONS["fbxsdk"]:gsub(" ", "\\ ")
 end
 
-solution "vaultClient"
+solution "udStream"
 	-- This hack just makes the VS project and also the makefile output their configurations in the idiomatic order
 	if (_ACTION == "gmake" or _ACTION == "gmake2") and os.target() == "linux" then
 		configurations { "Release", "Debug", "ReleaseClang", "DebugClang" }
@@ -215,7 +215,7 @@ solution "vaultClient"
 
 	if os.target() == "emscripten" then
 		platforms { "Emscripten" }
-		buildoptions { "-s USE_SDL=2", "-s USE_PTHREADS=1", "-s PTHREAD_POOL_SIZE=20", "-s PROXY_TO_PTHREAD=1", --[["-s OFFSCREEN_FRAMEBUFFER=1",]] "-s OFFSCREENCANVAS_SUPPORT=1", --[["-s ASSERTIONS=2",]] "-s EMULATE_FUNCTION_POINTER_CASTS=1", "-s ABORTING_MALLOC=0", "-s WASM=1", "-mnontrapping-fptoint", "-s FORCE_FILESYSTEM=1", "-lidbfs.js", --[["-g", "-s SAFE_HEAP=1",]] "-s TOTAL_MEMORY=2147418112" }
+		buildoptions { "-s USE_SDL=2", "-s USE_PTHREADS=1", "-s PTHREAD_POOL_SIZE=20", "-s PROXY_TO_PTHREAD=1", --[["-s OFFSCREEN_FRAMEBUFFER=1",]] "-s OFFSCREENCANVAS_SUPPORT=1", --[["-s ASSERTIONS=2",]] "-s EMULATE_FUNCTION_POINTER_CASTS=1", "-s ABORTING_MALLOC=0", "-s WASM=1", "-mnontrapping-fptoint", "-s FORCE_FILESYSTEM=1", --[["-g", "-s SAFE_HEAP=1",]] "-s TOTAL_MEMORY=2147418112" }
 		linkoptions  { "-s USE_SDL=2", "-s USE_PTHREADS=1", "-s PTHREAD_POOL_SIZE=20", "-s PROXY_TO_PTHREAD=1", --[["-s OFFSCREEN_FRAMEBUFFER=1",]] "-s OFFSCREENCANVAS_SUPPORT=1", --[["-s ASSERTIONS=2",]] "-s EMULATE_FUNCTION_POINTER_CASTS=1", "-s ABORTING_MALLOC=0", "-s WASM=1", "-mnontrapping-fptoint", "-s FORCE_FILESYSTEM=1", "-lidbfs.js", --[["-g", "-s SAFE_HEAP=1",]] "-s TOTAL_MEMORY=2147418112" }
 		linkoptions { "-O3" } -- TODO: This might not be required once `-s PROXY_TO_PTHREAD` is working.
 		targetextension ".bc"
@@ -234,7 +234,7 @@ solution "vaultClient"
 	end
 
 	editorintegration "on"
-	startproject "vaultClient"
+	startproject "udStream"
 	cppdialect "C++14"
 	pic "On"
 	editandcontinue "Off"

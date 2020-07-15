@@ -7,6 +7,7 @@
 struct vcState;
 class vcSceneItem;
 class vcFolder;
+class udFilename;
 
 struct vcProject
 {
@@ -27,12 +28,21 @@ enum vcProjectStandardZones
   vcPSZ_WGS84ECEF = 4978
 };
 
-void vcProject_InitBlankScene(vcState *pProgramState, const char *pName, int srid);
-bool vcProject_InitFromURI(vcState *pProgramState, const char *pFilename);
+const char* vcProject_ErrorToString(vdkError error);
+
+bool vcProject_CreateBlankScene(vcState *pProgramState, const char *pName, int srid);
+vdkError vcProject_CreateFileScene(vcState *pProgramState, const char *pFileName, const char *pProjectName, int srid);
+vdkError vcProject_CreateServerScene(vcState *pProgramState, const char *pName, const char *pGroupUUID, int srid);
+
+bool vcProject_LoadFromURI(vcState *pProgramState, const char *pFilename);
+bool vcProject_LoadFromServer(vcState *pProgramState, const char *pProjectID);
 
 void vcProject_Deinit(vcState *pProgramData, vcProject *pProject);
 
-void vcProject_Save(vcState *pProgramState, const char *pPath, bool allowOverride);
+void vcProject_AutoCompletedName(udFilename *exportFilename, const char *pProjectName, const char *pFileName);
+bool vcProject_Save(vcState *pProgramState);
+bool vcProject_SaveAs(vcState *pProgramState, const char *pPath, bool allowOverride);
+vdkError vcProject_SaveAsServer(vcState *pProgramState, const char *pProjectID);
 
 bool vcProject_AbleToChange(vcState *pProgramState);
 
@@ -52,5 +62,7 @@ bool vcProject_UpdateNodeGeometryFromLatLong(vcProject *pProject, vdkProjectNode
 bool vcProject_FetchNodeGeometryAsCartesian(vcProject *pProject, vdkProjectNode *pNode, const udGeoZone &zone, udDouble3 **ppPoints, int *pNumPoints);
 
 void vcProject_ExtractAttributionText(vdkProjectNode *pFolderNode, const char **ppCurrentText);
+
+void vcProject_RemoveHistoryItem(vcState *pProgramState, size_t itemPosition);
 
 #endif // vcProject_h__

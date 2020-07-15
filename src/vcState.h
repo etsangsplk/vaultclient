@@ -6,6 +6,7 @@
 #include "udChunkedArray.h"
 #include "udJSON.h"
 #include "udWorkerPool.h"
+#include "udThread.h"
 
 #include "vcImageRenderer.h"
 #include "vcSettings.h"
@@ -15,6 +16,7 @@
 #include "vcFolder.h"
 #include "vcStrings.h"
 #include "vcProject.h"
+#include "vcSession.h"
 
 #include "vdkError.h"
 #include "vdkContext.h"
@@ -54,6 +56,16 @@ enum vcLoginStatus
   vcLS_ProxyAuthFailed,
   vcLS_OtherError,
 
+  vcLS_ForgotPassword,
+  vcLS_ForgotPasswordPending,
+  vcLS_ForgotPasswordCheckEmail,
+  vcLS_ForgotPasswordTryPortal,
+
+  vcLS_Register,
+  vcLS_RegisterPending,
+  vcLS_RegisterCheckEmail,
+  vcLS_RegisterTryPortal,
+
   vcLS_Count
 };
 
@@ -87,6 +99,7 @@ struct vcState
   int activeSetting;
 
   int openModals; // This is controlled inside vcModals.cpp
+  int closeModals; // This is controlled inside vcModals.cpp
   bool modalOpen;
 
   vcCamera camera;
@@ -100,6 +113,14 @@ struct vcState
     const char *pData;
     udResult resultCode;
   };
+
+  struct vcBranding
+  {
+    char appName[64];
+    char copyrightName[64];
+    char supportEmail[256];
+    uint32_t colours[4];
+  } branding;
 
   udChunkedArray<const char*> loadList;
   udChunkedArray<ErrorItem> errorItems;
@@ -118,12 +139,15 @@ struct vcState
   udGeoZone geozone;
 
   bool showWatermark;
+  bool isStreaming;
+  int64_t streamingMemory;
+  double lastSuccessfulSave;
 
   vcTexture *pCompanyLogo;
   vcTexture *pCompanyWatermark;
-  vcTexture *pSceneWatermark;
   vcTexture *pUITexture;
   vcTexture *pWhiteTexture;
+  vcTexture *pInputsTexture;
 
   bool isUsingAnchorPoint;
   udDouble3 worldAnchorPoint;
@@ -134,7 +158,7 @@ struct vcState
   udDouble3 worldMousePosLongLat;
   bool pickingSuccess;
   int udModelPickedIndex;
-  uint64_t udModelPickedNode;
+  vdkVoxelID udModelPickedNode;
   udJSON udModelNodeAttributes;
 
   bool finishedStartup;
@@ -163,13 +187,21 @@ struct vcState
   const char *pReleaseNotes; //Only loaded when requested
   bool passwordFieldHasFocus;
 
+  // Statics/Temporaries used in modals
   char modelPath[vcMaxPathLength];
+  bool modalTempBool;
 
   int renaming;
   char renameText[30];
 
   vcSettings settings;
-  udJSON projects;
+
+  udRWLock *pSessionLock; // Used to lock access to session info
+  double lastSync;
+  double highestProjectTime; // Most recently updated project time
+  udChunkedArray<vcFeaturedProjectInfo> featuredProjects;
+  udChunkedArray<vcGroupInfo> groups;
+
   udJSON packageInfo;
   udJSON profileInfo;
 

@@ -14,6 +14,8 @@ struct PS_INPUT
   float2 depth : TEXCOORD1;
   float2 objectInfo : TEXCOORD2;
   float2 normalUV : TEXCOORD3;
+  float3 normal: TEXCOORD4;
+  float3 bitangent: TEXCOORD5;
 };
 
 struct PS_OUTPUT
@@ -31,7 +33,7 @@ Texture2D normalTexture;
 float4 packNormal(float3 normal, float objectId, float depth)
 {
   float zSign = step(0, normal.z) * 2 - 1; // signed 0
-  return float4(normal.x, normal.y, objectId, zSign * depth);
+  return float4(objectId, zSign * depth, normal.x, normal.y);
 }
 
 PS_OUTPUT main(PS_INPUT input)
@@ -41,6 +43,11 @@ PS_OUTPUT main(PS_INPUT input)
 
   float3 normal = normalTexture.Sample(normalSampler, input.normalUV).xyz;
   normal = normal * float3(2.0, 2.0, 2.0) - float3(1.0, 1.0, 1.0);
+  
+  float3 tangent = normalize(cross(input.bitangent, input.normal));
+  float3x3 tbn = float3x3(tangent, input.bitangent, input.normal);
+  normal.y *= -1; // TODO: Investigate this flip
+  normal = normalize(mul(normal, tbn));
   
   output.Color0 = float4(col.xyz * input.colour.xyz, input.colour.w);
   

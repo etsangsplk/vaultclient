@@ -29,7 +29,7 @@ Texture2D albedoTexture;
 float4 packNormal(float3 normal, float objectId, float depth)
 {
   float zSign = step(0, normal.z) * 2 - 1; // signed 0
-  return float4(normal.x, normal.y, objectId, zSign * depth);
+  return float4(objectId, zSign * depth, normal.x, normal.y);
 }
 
 PS_OUTPUT main(PS_INPUT input)
@@ -42,5 +42,9 @@ PS_OUTPUT main(PS_INPUT input)
   output.Depth0 = log2(input.fLogDepth.x) * halfFcoef;
 
   output.Normal = packNormal(float3(0.0, 0.0, 0.0), input.objectInfo.x, output.Depth0);
+  
+  // conditionally disable selection (using alpha-blend)
+  output.Normal.w = input.objectInfo.y;
+	
   return output;
 }

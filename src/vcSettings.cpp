@@ -6,6 +6,7 @@
 #include "udStringUtil.h"
 
 #include "imgui.h"
+#include "imgui_ex/vcImGuiSimpleWidgets.h"
 
 #include "vcClassificationColours.h"
 #include "vcStringFormat.h"
@@ -25,7 +26,7 @@ void vcSettings_InitializePrefPath(vcSettings *pSettings)
   if (pSettings->noLocalStorage)
     return;
 
-  char *pPath = SDL_GetPrefPath("euclideon", "client");
+  char *pPath = SDL_GetPrefPath("euclideon", "udstream");
 
   if (pPath != nullptr)
   {
@@ -112,6 +113,49 @@ bool vcSettings_ApplyConnectionSettings(vcSettings *pSettings)
   return true;
 }
 
+void vcSettings_GetDeviceLanguage(char languageCode[3], char countryCode[3])
+{
+  const char *pUTF8 = nullptr;
+
+#if UDPLATFORM_WINDOWS
+  wchar_t locale[LOCALE_NAME_MAX_LENGTH];
+
+  if (GetUserDefaultLocaleName(locale, LOCALE_NAME_MAX_LENGTH) != 0)
+  {
+    //Decode here
+    udOSString code(locale);
+    pUTF8 = udStrdup(code);
+  }
+
+#elif UDPLATFORM_EMSCRIPTEN
+  char *pTemp = (char*)EM_ASM_INT({
+    var jsString = navigator.language;
+    var lengthBytes = lengthBytesUTF8(jsString) + 1;
+    var stringOnWasmHeap = _malloc(lengthBytes);
+    stringToUTF8(jsString, stringOnWasmHeap, lengthBytes);
+    return stringOnWasmHeap;
+  });
+  pUTF8 = udStrdup(pTemp);
+  free(pTemp);
+#endif
+
+  if (pUTF8 == nullptr)
+  {
+    udStrcpy(languageCode, 3, "en");
+    udStrcpy(countryCode, 3, "AU");
+  }
+  else
+  {
+    if (udStrlen(pUTF8) == 2 || (udStrlen(pUTF8) > 2 && pUTF8[2] == '-'))
+      udStrncpy(languageCode, 3, pUTF8, 2);
+
+    if (udStrlen(pUTF8) >= 5 && pUTF8[2] == '-')
+      udStrncpy(countryCode, 3, &pUTF8[3], 2);
+
+    udFree(pUTF8);
+  }
+}
+
 bool vcSettings_Load(vcSettings *pSettings, bool forceReset /*= false*/, vcSettingCategory group /*= vcSC_All*/)
 {
   ImGui::GetIO().IniFilename = NULL; // Disables auto save and load
@@ -141,32 +185,46 @@ bool vcSettings_Load(vcSettings *pSettings, bool forceReset /*= false*/, vcSetti
   if (group == vcSC_All || group == vcSC_Appearance)
   {
     pSettings->window.useNativeUI = data.Get("window.showNativeUI").AsBool(true);
-    udStrcpy(pSettings->window.languageCode, data.Get("window.language").AsString("enAU"));
+    udStrcpy(pSettings->window.languageCode, data.Get("window.language").AsString(""));
 
     pSettings->presentation.showDiagnosticInfo = data.Get("showDiagnosticInfo").AsBool(false);
-    pSettings->presentation.showEuclideonLogo = data.Get("showEuclideonLogo").AsBool(false);
+    pSettings->presentation.showEuclideonLogo = data.Get("showEuclideonLogo").AsBool(true);
     pSettings->presentation.showCameraInfo = data.Get("showCameraInfo").AsBool(false);
     pSettings->presentation.showProjectionInfo = data.Get("showGISInfo").AsBool(false);
     pSettings->presentation.showAdvancedGIS = data.Get("showAdvancedGISOptions").AsBool(false);
     pSettings->presentation.sceneExplorerCollapsed = data.Get("sceneExplorerCollapsed").AsBool(true);
-    pSettings->presentation.loginRenderLicense = data.Get("loginRenderLicense").AsBool(false);
-    pSettings->presentation.saturation = data.Get("saturation").AsFloat(1.0f);
     pSettings->presentation.POIFadeDistance = data.Get("POIfadeDistance").AsFloat(10000.f);
     pSettings->presentation.imageRescaleDistance = data.Get("ImageRescaleDistance").AsFloat(10000.f);
     pSettings->presentation.limitFPSInBackground = data.Get("limitFPSInBackground").AsBool(true);
-    pSettings->presentation.pointMode = data.Get("pointMode").AsInt();
     pSettings->presentation.layout = (vcWindowLayout)data.Get("layout").AsInt(vcWL_SceneRight);
     pSettings->presentation.sceneExplorerSize = data.Get("layoutSceneExplorerSize").AsInt(350);
     pSettings->presentation.convertLeftPanelPercentage = data.Get("convertLeftPanelPercentage").AsFloat(0.33f);
     pSettings->presentation.columnSizeCorrect = false;
 
-    pSettings->presentation.skybox.type = (vcSkyboxType)data.Get("skybox.type").AsInt(vcSkyboxType_Atmosphere);
-    pSettings->presentation.skybox.colour = data.Get("skybox.colour").AsFloat4(udFloat4::create(0.39f, 0.58f, 0.66f, 1.f));
-    pSettings->presentation.skybox.exposure = data.Get("skybox.exposure").AsFloat(7.5f);
-    pSettings->presentation.skybox.timeOfDay = data.Get("skybox.timeOfDay").AsFloat(12.f);
-    pSettings->presentation.skybox.month = data.Get("skybox.month").AsFloat(6.f);
-    pSettings->presentation.skybox.keepSameTime = data.Get("skybox.keepSameTime").AsBool(true);
-    pSettings->presentation.skybox.useLiveTime = data.Get("skybox.uselivetime").AsBool(false);
+    //Units of measurement
+    vcUnitConversion_SetMetric(&pSettings->unitConversionData); //set some defaults.
+    for (uint32_t i = 0; i < vcUnitConversionData::MaxPromotions; ++i)
+    {
+      pSettings->unitConversionData.distanceUnit[i].unit = (vcDistanceUnit)data.Get("unitConversion.distanceUnit[%d].unit", i).AsInt(pSettings->unitConversionData.distanceUnit[i].unit);
+      pSettings->unitConversionData.areaUnit[i].unit = (vcAreaUnit)data.Get("unitConversion.areaUnit[%d].unit", i).AsInt(pSettings->unitConversionData.areaUnit[i].unit);
+      pSettings->unitConversionData.volumeUnit[i].unit = (vcVolumeUnit)data.Get("unitConversion.volumeUnit[%d].unit", i).AsInt(pSettings->unitConversionData.volumeUnit[i].unit);
+
+      pSettings->unitConversionData.distanceUnit[i].upperLimit = data.Get("unitConversion.distanceUnit[%d].upperLimit", i).AsDouble(pSettings->unitConversionData.distanceUnit[i].upperLimit);
+      pSettings->unitConversionData.areaUnit[i].upperLimit = data.Get("unitConversion.areaUnit[%d].upperLimit", i).AsDouble(pSettings->unitConversionData.areaUnit[i].upperLimit);
+      pSettings->unitConversionData.volumeUnit[i].upperLimit = data.Get("unitConversion.volumeUnit[%d].upperLimit", i).AsDouble(pSettings->unitConversionData.volumeUnit[i].upperLimit);
+    }
+
+    pSettings->unitConversionData.speedUnit = (vcSpeedUnit)data.Get("unitConversion.speedUnit").AsInt(pSettings->unitConversionData.speedUnit);
+    pSettings->unitConversionData.temperatureUnit = (vcTemperatureUnit)data.Get("unitConversion.temperatureUnit").AsInt(pSettings->unitConversionData.temperatureUnit);
+    pSettings->unitConversionData.timeReference = (vcTimeReference)data.Get("unitConversion.timeUnit").AsInt(pSettings->unitConversionData.timeReference);
+
+    pSettings->unitConversionData.distanceSigFigs = data.Get("unitConversion.distanceSigFigs").AsInt(pSettings->unitConversionData.distanceSigFigs);
+    pSettings->unitConversionData.areaSigFigs = data.Get("unitConversion.areaSigFigs").AsInt(pSettings->unitConversionData.areaSigFigs);
+    pSettings->unitConversionData.volumeSigFigs = data.Get("unitConversion.volumeSigFigs").AsInt(pSettings->unitConversionData.volumeSigFigs);
+    pSettings->unitConversionData.speedSigFigs = data.Get("unitConversion.speedSigFigs").AsInt(pSettings->unitConversionData.speedSigFigs);
+    pSettings->unitConversionData.temperatureSigFigs = data.Get("unitConversion.temperatureSigFigs").AsInt(pSettings->unitConversionData.temperatureSigFigs);
+    pSettings->unitConversionData.timeSigFigs = data.Get("unitConversion.timeSigFigs").AsInt(pSettings->unitConversionData.timeSigFigs);
+
   }
 
   if (group == vcSC_All || group == vcSC_InputControls)
@@ -181,7 +239,6 @@ bool vcSettings_Load(vcSettings *pSettings, bool forceReset /*= false*/, vcSetti
     pSettings->camera.cameraMouseBindings[1] = (vcCameraPivotMode)data.Get("camera.cameraMouseBindings[1]").AsInt(vcCPM_Pan);
     pSettings->camera.cameraMouseBindings[2] = (vcCameraPivotMode)data.Get("camera.cameraMouseBindings[2]").AsInt(vcCPM_Orbit);
     pSettings->camera.scrollWheelMode = (vcCameraScrollWheelMode)data.Get("camera.scrollwheelBinding").AsInt(vcCSWM_Dolly);
-    pSettings->camera.keepAboveSurface = data.Get("camera.keepAboveSurface").AsBool(false);
 
     pSettings->mouseSnap.enable = data.Get("mouseSnap.enable").AsBool(true);
     pSettings->mouseSnap.range = data.Get("mouseSnap.range").AsInt(8);
@@ -205,11 +262,26 @@ bool vcSettings_Load(vcSettings *pSettings, bool forceReset /*= false*/, vcSetti
     pSettings->maptiles.mapQuality = (vcTileRendererMapQuality)data.Get("maptiles.mapQuality").AsInt(vcTRMQ_High);
     pSettings->maptiles.mapOptions = (vcTileRendererFlags)data.Get("maptiles.mapOptions").AsInt(vcTRF_None);
 
+    if (data.Get("camera.keepAboveSurface").IsBool())
+      pSettings->camera.keepAboveSurface = data.Get("camera.keepAboveSurface").AsBool(false);
+    else
+      pSettings->camera.keepAboveSurface = data.Get("maptiles.keepAboveSurface").AsBool(false);
+
     vcSettings_ApplyMapChange(pSettings);
   }
 
   if (group == vcSC_All || group == vcSC_Visualization)
   {
+    pSettings->presentation.pointMode = data.Get("pointMode").AsInt();
+    pSettings->presentation.saturation = data.Get("saturation").AsFloat(1.0f);
+    pSettings->presentation.skybox.type = (vcSkyboxType)data.Get("skybox.type").AsInt(vcSkyboxType_Atmosphere);
+    pSettings->presentation.skybox.colour = data.Get("skybox.colour").AsFloat4(udFloat4::create(0.39f, 0.58f, 0.66f, 1.f));
+    pSettings->presentation.skybox.exposure = data.Get("skybox.exposure").AsFloat(7.5f);
+    pSettings->presentation.skybox.timeOfDay = data.Get("skybox.timeOfDay").AsFloat(12.f);
+    pSettings->presentation.skybox.month = data.Get("skybox.month").AsFloat(6.f);
+    pSettings->presentation.skybox.keepSameTime = data.Get("skybox.keepSameTime").AsBool(true);
+    pSettings->presentation.skybox.useLiveTime = data.Get("skybox.uselivetime").AsBool(false);
+
     pSettings->camera.lensIndex = data.Get("camera.lensId").AsInt(vcLS_30mm);
     pSettings->camera.fieldOfView = data.Get("camera.fieldOfView").AsFloat(vcLens30mm);
 
@@ -272,7 +344,8 @@ bool vcSettings_Load(vcSettings *pSettings, bool forceReset /*= false*/, vcSetti
     //GPSTime
     pSettings->visualization.GPSTime.minTime = data.Get("visualization.GPSTime.minTime").AsDouble(0.0);
     pSettings->visualization.GPSTime.maxTime = data.Get("visualization.GPSTime.maxTime").AsDouble(0.0);
-
+    pSettings->visualization.GPSTime.inputFormat = (vcTimeReference)data.Get("visualization.GPSTime.inputFormat").AsInt((int)vcTimeReference_GPS);
+    
     //Scan Angle
     pSettings->visualization.scanAngle.minAngle = data.Get("visualization.scanAngle.minAngle").AsDouble(-180.0);
     pSettings->visualization.scanAngle.maxAngle = data.Get("visualization.scanAngle.maxAngle").AsDouble(180.0);
@@ -339,17 +412,21 @@ bool vcSettings_Load(vcSettings *pSettings, bool forceReset /*= false*/, vcSetti
   if (group == vcSC_Tools || group == vcSC_All)
   {
     const float defaultLineColour[4] = {1.0f, 1.0f, 0.0f, 1.0f};
+    const float defaultFillColour[4] = { 1.0f, 0.0f, 1.0f, 0.25f };
     const float defaultTextColour[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     const float defaultBackgroundColour[4] = {0.0f, 0.0f, 0.0f, 0.5f};
 
     //Lines
     pSettings->tools.line.minWidth = data.Get("tools.line.minWidth").AsFloat(0.1f);
     pSettings->tools.line.maxWidth = data.Get("tools.line.maxWidth").AsFloat(1000.f);
-    pSettings->tools.line.width = data.Get("tools.line.width").AsFloat(10.f);
+    pSettings->tools.line.width = data.Get("tools.line.width").AsFloat(3.f);
     pSettings->tools.line.fenceMode = data.Get("tools.line.fenceMode").AsInt(0);
     pSettings->tools.line.style = data.Get("tools.line.style").AsInt(1);
     for (int i = 0; i < 4; i++)
       pSettings->tools.line.colour[i] = data.Get("tools.line.colour[%d]", i).AsFloat(defaultLineColour[i]);
+
+    for (int i = 0; i < 4; i++)
+      pSettings->tools.fill.colour[i] = data.Get("tools.fill.colour[%d]", i).AsFloat(defaultFillColour[i]);
 
     //Labels
     for (int i = 0; i < 4; i++)
@@ -362,8 +439,6 @@ bool vcSettings_Load(vcSettings *pSettings, bool forceReset /*= false*/, vcSetti
   if (group == vcSC_Convert || group == vcSC_All)
   {
     udStrcpy(pSettings->convertdefaults.tempDirectory, data.Get("convert.tempDirectory").AsString(""));
-    udStrcpy(pSettings->convertdefaults.watermark.filename, data.Get("convert.watermark").AsString(""));
-    pSettings->convertdefaults.watermark.isDirty = true;
     udStrcpy(pSettings->convertdefaults.author, data.Get("convert.author").AsString(""));
     udStrcpy(pSettings->convertdefaults.comment, data.Get("convert.comment").AsString(""));
     udStrcpy(pSettings->convertdefaults.copyright, data.Get("convert.copyright").AsString(""));
@@ -441,11 +516,11 @@ bool vcSettings_Load(vcSettings *pSettings, bool forceReset /*= false*/, vcSetti
     // Login Info
     pSettings->loginInfo.rememberServer = data.Get("login.rememberServer").AsBool(true);
     if (pSettings->loginInfo.rememberServer)
-      udStrcpy(pSettings->loginInfo.serverURL, data.Get("login.serverURL").AsString("https://earth.vault.euclideon.com"));
+      udStrcpy(pSettings->loginInfo.serverURL, data.Get("login.serverURL").AsString("https://udstream.euclideon.com"));
 
-    pSettings->loginInfo.rememberUsername = data.Get("login.rememberUsername").AsBool(false);
-    if (pSettings->loginInfo.rememberUsername)
-      udStrcpy(pSettings->loginInfo.username, data.Get("login.username").AsString());
+    pSettings->loginInfo.rememberEmail = data.Get("login.rememberUsername").AsBool(false);
+    if (pSettings->loginInfo.rememberEmail)
+      udStrcpy(pSettings->loginInfo.email, data.Get("login.username").AsString());
 
     // Camera
     pSettings->camera.moveSpeed = data.Get("camera.moveSpeed").AsFloat(10.f);
@@ -464,6 +539,11 @@ bool vcSettings_Load(vcSettings *pSettings, bool forceReset /*= false*/, vcSetti
       {
         if (languages.IsArray())
         {
+          char preferredLanguage[3];
+          char preferredCountry[3];
+
+          vcSettings_GetDeviceLanguage(preferredLanguage, preferredCountry);
+
           pSettings->languageOptions.Clear();
           pSettings->languageOptions.ReserveBack(languages.ArrayLength());
 
@@ -472,10 +552,21 @@ bool vcSettings_Load(vcSettings *pSettings, bool forceReset /*= false*/, vcSetti
             vcLanguageOption *pLangOption = pSettings->languageOptions.PushBack();
             udStrcpy(pLangOption->languageName, languages.Get("[%zu].localname", i).AsString());
             udStrcpy(pLangOption->filename, languages.Get("[%zu].filename", i).AsString());
+
+            if (pSettings->window.languageCode[0] == '\0')
+            {
+              if (udStrBeginsWith(pLangOption->filename, preferredLanguage))
+              {
+                udStrcpy(pSettings->window.languageCode, pLangOption->filename);
+              }
+            }
           }
         }
       }
     }
+
+    if (pSettings->window.languageCode[0] == '\0')
+      udStrcpy(pSettings->window.languageCode, "enAU");
 
     udFree(pFileContents);
   }
@@ -489,6 +580,21 @@ bool vcSettings_Load(vcSettings *pSettings, bool forceReset /*= false*/, vcSetti
       udStrcpy(pSettings->screenshot.outputPath, data.Get("screenshot.outputPath").AsString());
     pSettings->screenshot.resolution.x = data.Get("screenshot.resolution.width").AsInt(4096); // Defaults to 4K
     pSettings->screenshot.resolution.y = data.Get("screenshot.resolution.height").AsInt(2160);
+  }
+
+  if (group == vcSC_All)
+  {
+    // Previous projects
+    for (size_t i = 0; i < vcMaxProjectHistoryCount; i++)
+    {
+      bool isServerProject = data.Get("projectsHistory.isServerProject[%zu]", i).AsBool(false);
+      const char *pProjectName = data.Get("projectsHistory.name[%zu]", i).AsString();
+      const char *pProjectPath = data.Get("projectsHistory.path[%zu]", i).AsString();
+
+      if (pProjectName != nullptr && pProjectPath != nullptr)
+        pSettings->projectsHistory.projects.PushBack({ isServerProject, udStrdup(pProjectName), udStrdup(pProjectPath) });
+
+    }
   }
 
   udFree(pSavedData);
@@ -525,7 +631,6 @@ bool vcSettings_Save(vcSettings *pSettings)
   data.Set("showEuclideonLogo = %s", pSettings->presentation.showEuclideonLogo ? "true" : "false");
   data.Set("showCameraInfo = %s", pSettings->presentation.showCameraInfo ? "true" : "false");
   data.Set("showGISInfo = %s", pSettings->presentation.showProjectionInfo ? "true" : "false");
-  data.Set("loginRenderLicense = %s", pSettings->presentation.loginRenderLicense ? "true" : "false");
   data.Set("saturation = %f", pSettings->presentation.saturation);
   data.Set("showAdvancedGISOptions = %s", pSettings->presentation.showAdvancedGIS ? "true" : "false");
   data.Set("sceneExplorerCollapsed = %s", pSettings->presentation.sceneExplorerCollapsed ? "true" : "false");
@@ -569,10 +674,10 @@ bool vcSettings_Save(vcSettings *pSettings)
     data.Set(&tempNode, "login.serverURL");
   }
 
-  data.Set("login.rememberUsername = %s", pSettings->loginInfo.rememberUsername ? "true" : "false");
-  if (pSettings->loginInfo.rememberUsername)
+  data.Set("login.rememberUsername = %s", pSettings->loginInfo.rememberEmail ? "true" : "false");
+  if (pSettings->loginInfo.rememberEmail)
   {
-    tempNode.SetString(pSettings->loginInfo.username);
+    tempNode.SetString(pSettings->loginInfo.email);
     data.Set(&tempNode, "login.username");
   }
 
@@ -606,7 +711,29 @@ bool vcSettings_Save(vcSettings *pSettings)
   data.Set("camera.moveMode = %d", pSettings->camera.lockAltitude ? 1 : 0);
   data.Set("camera.cameraMouseBindings = [%d, %d, %d]", pSettings->camera.cameraMouseBindings[0], pSettings->camera.cameraMouseBindings[1], pSettings->camera.cameraMouseBindings[2]);
   data.Set("camera.scrollwheelBinding = %d", pSettings->camera.scrollWheelMode);
-  data.Set("camera.keepAboveSurface = %s", pSettings->camera.keepAboveSurface ? "true" : "false");
+
+  //Units of measurement
+  for (uint32_t i = 0; i < vcUnitConversionData::MaxPromotions; ++i)
+  {
+    data.Set("unitConversion.distanceUnit[%u].unit = %u", i, pSettings->unitConversionData.distanceUnit[i].unit);
+    data.Set("unitConversion.areaUnit[%u].unit = %u", i, pSettings->unitConversionData.areaUnit[i].unit);
+    data.Set("unitConversion.volumeUnit[%u].unit = %u", i, pSettings->unitConversionData.volumeUnit[i].unit);
+
+    data.Set("unitConversion.distanceUnit[%u].upperLimit = %f", i, pSettings->unitConversionData.distanceUnit[i].upperLimit);
+    data.Set("unitConversion.areaUnit[%u].upperLimit = %f", i, pSettings->unitConversionData.areaUnit[i].upperLimit);
+    data.Set("unitConversion.volumeUnit[%u].upperLimit = %f", i, pSettings->unitConversionData.volumeUnit[i].upperLimit);
+  }
+
+  data.Set("unitConversion.speedUnit = %u", pSettings->unitConversionData.speedUnit);
+  data.Set("unitConversion.temperatureUnit = %u", pSettings->unitConversionData.temperatureUnit);
+  data.Set("unitConversion.timeReference = %u", pSettings->unitConversionData.timeReference);
+
+  data.Set("unitConversion.distanceSigFigs = %u", pSettings->unitConversionData.distanceSigFigs);
+  data.Set("unitConversion.areaSigFigs = %u", pSettings->unitConversionData.areaSigFigs);
+  data.Set("unitConversion.volumeSigFigs = %u", pSettings->unitConversionData.volumeSigFigs);
+  data.Set("unitConversion.speedSigFigs = %u", pSettings->unitConversionData.speedSigFigs);
+  data.Set("unitConversion.temperatureSigFigs = %u", pSettings->unitConversionData.temperatureSigFigs);
+  data.Set("unitConversion.timeSigFigs = %u", pSettings->unitConversionData.timeSigFigs);
 
   // Visualization
   data.Set("visualization.mode = %d", pSettings->visualization.mode - 1);
@@ -646,7 +773,8 @@ bool vcSettings_Save(vcSettings *pSettings)
   //GPS Time
   data.Set("visualization.GPSTime.minTime = %f", pSettings->visualization.GPSTime.minTime);
   data.Set("visualization.GPSTime.maxTime = %f", pSettings->visualization.GPSTime.maxTime);
-
+  data.Set("visualization.GPSTime.inputFormat = %u", pSettings->visualization.GPSTime.inputFormat);
+  
   //Scan angle
   data.Set("visualization.scanAngle.minAngle = %f", pSettings->visualization.scanAngle.minAngle);
   data.Set("visualization.scanAngle.maxAngle = %f", pSettings->visualization.scanAngle.maxAngle);
@@ -706,6 +834,9 @@ bool vcSettings_Save(vcSettings *pSettings)
     data.Set("tools.line.colour[] = %f", pSettings->tools.line.colour[i]);
 
   for (int i = 0; i < 4; i++)
+    data.Set("tools.fill.colour[] = %f", pSettings->tools.fill.colour[i]);
+
+  for (int i = 0; i < 4; i++)
     data.Set("tools.label.textColour[] = %f", pSettings->tools.label.textColour[i]);
   for (int i = 0; i < 4; i++)
     data.Set("tools.label.backgroundColour[] = %f", pSettings->tools.label.backgroundColour[i]);
@@ -714,9 +845,6 @@ bool vcSettings_Save(vcSettings *pSettings)
   // Convert Settings
   tempNode.SetString(pSettings->convertdefaults.tempDirectory);
   data.Set(&tempNode, "convert.tempDirectory");
-
-  tempNode.SetString(pSettings->convertdefaults.watermark.filename);
-  data.Set(&tempNode, "convert.watermark");
 
   tempNode.SetString(pSettings->convertdefaults.author);
   data.Set(&tempNode, "convert.author");
@@ -744,6 +872,7 @@ bool vcSettings_Save(vcSettings *pSettings)
   data.Set("maptiles.mapHeight = %f", pSettings->maptiles.mapHeight);
   data.Set("maptiles.mapQuality = %d", int(pSettings->maptiles.mapQuality));
   data.Set("maptiles.mapOptions = %d", int(pSettings->maptiles.mapOptions));
+  data.Set("maptiles.keepAboveSurface = %s", pSettings->camera.keepAboveSurface ? "true" : "false");
 
   tempNode.SetString(pSettings->maptiles.mapType);
   data.Set(&tempNode, "maptiles.type");
@@ -760,6 +889,21 @@ bool vcSettings_Save(vcSettings *pSettings)
   // mouse snap setting
   data.Set("mouseSnap.enable = %s", pSettings->mouseSnap.enable ? "true" : "false");
   data.Set("mouseSnap.range = %d", int(pSettings->mouseSnap.range));
+
+  // previous projects
+  for (size_t i = 0; i < pSettings->projectsHistory.projects.length; i++)
+  {
+    vcProjectHistoryInfo *pProjectHistory = &pSettings->projectsHistory.projects[i];
+
+    data.Set("projectsHistory.isServerProject[] = %s", pProjectHistory->isServerProject ? "true" : "false");
+
+    udJSON temp;
+    temp.SetString(pProjectHistory->pName);
+    data.Set(&temp, "projectsHistory.name[]");
+
+    temp.SetString(pProjectHistory->pPath);
+    data.Set(&temp, "projectsHistory.path[]");
+  }
 
   // Save
   const char *pSettingsStr;
@@ -788,7 +932,15 @@ void vcSettings_Cleanup(vcSettings *pSettings)
   pSettings->languageOptions.Deinit();
   pSettings->visualization.pointSourceID.colourMap.Deinit();
 
-  vcTexture_Destroy(&pSettings->convertdefaults.watermark.pTexture);
+  for (size_t i = 0; i < pSettings->projectsHistory.projects.length; ++i)
+    vcSettings_CleanupHistoryProjectItem(&pSettings->projectsHistory.projects[i]);
+  pSettings->projectsHistory.projects.Deinit();
+}
+
+void vcSettings_CleanupHistoryProjectItem(vcProjectHistoryInfo *pProjectItem)
+{
+  udFree(pProjectItem->pName);
+  udFree(pProjectItem->pPath);
 }
 
 #if UDPLATFORM_EMSCRIPTEN
@@ -800,19 +952,19 @@ void *vcSettings_GetAssetPathAllocateCallback(size_t length)
 
 const char *vcSettings_GetAssetPath(const char *pFilename)
 {
+  const char *pOutput = nullptr;
+
 #if UDPLATFORM_IOS || UDPLATFORM_IOS_SIMULATOR
   udFilename filename(pFilename);
-  return udTempStr("./%s", filename.GetFilenameWithExt());
+  udSprintf(&pOutput, "./%s", filename.GetFilenameWithExt());
 #elif UDPLATFORM_OSX
   char *pBasePath = SDL_GetBasePath();
   if (pBasePath == nullptr)
     pBasePath = SDL_strdup("./");
 
   udFilename filename(pFilename);
-  const char *pOutput = udTempStr("%s%s", pBasePath, filename.GetFilenameWithExt());
+  udSprintf(&pOutput, "%s%s", pBasePath, filename.GetFilenameWithExt());
   SDL_free(pBasePath);
-
-  return pOutput;
 #elif UDPLATFORM_EMSCRIPTEN
   char *pURL = (char*)EM_ASM_INT({
     var url = self.location.href.substr(0, self.location.href.lastIndexOf('/'));
@@ -821,12 +973,13 @@ const char *vcSettings_GetAssetPath(const char *pFilename)
     stringToUTF8(url, pURL, lengthBytes + 1);
     return pURL;
   }, vcSettings_GetAssetPathAllocateCallback);
-  const char *pTempURL = udTempStr("%s/%s", pURL, pFilename);
+  udSprintf(&pOutput, "%s/%s", pURL, pFilename);
   udFree(pURL);
-  return pTempURL;
 #else
-  return udTempStr("%s", pFilename);
+  udSprintf(&pOutput, "%s", pFilename);
 #endif
+
+  return pOutput;
 }
 
 struct vcSDLFile : udFile
@@ -896,6 +1049,7 @@ epilogue:
     udFree(pFile->pFilenameCopy);
     udFree(pFile);
   }
+  udFree(pNewFilename);
 
   return result;
 #else
@@ -903,8 +1057,10 @@ epilogue:
   if (res == udR_Success)
   {
     udFree((*ppFile)->pFilenameCopy);
-    (*ppFile)->pFilenameCopy = udStrdup(pNewFilename);
+    (*ppFile)->pFilenameCopy = pNewFilename;
+    pNewFilename = nullptr;
   }
+  udFree(pNewFilename);
   return res;
 #endif
 }
@@ -978,34 +1134,22 @@ epilogue:
   return result;
 }
 
-void vcSettings_ApplyMapChange(vcSettings *pSettings)
+void vcSettings_LoadBranding(vcState *pState)
 {
-  // 'custom', 'euc-osm-base', 'euc-az-aerial', 'euc-az-roads'
+  udJSON branding = {};
+  const char *pBrandStrings = nullptr;
 
-  if (udStrEqual(pSettings->maptiles.mapType, "euc-osm-base"))
-  {
-    udStrcpy(pSettings->maptiles.activeServer.tileServerAddress, "https://slippy.vault.euclideon.com/{0}/{1}/{2}.png");
-    udStrcpy(pSettings->maptiles.activeServer.attribution, "\xC2\xA9 OpenStreetMap contributors");
-    udUUID_GenerateFromString(&pSettings->maptiles.activeServer.tileServerAddressUUID, "https://slippy.vault.euclideon.com");
-  }
-  else if (udStrEqual(pSettings->maptiles.mapType, "euc-az-aerial"))
-  {
-    udStrcpy(pSettings->maptiles.activeServer.tileServerAddress, "https://slippy.vault.euclideon.com/aerial/{0}/{1}/{2}.png");
-    udStrcpy(pSettings->maptiles.activeServer.attribution, "\xC2\xA9 1992 - 2020 TomTom");
-    udUUID_GenerateFromString(&pSettings->maptiles.activeServer.tileServerAddressUUID, "https://slippy.vault.euclideon.com/aerial");
-  }
-  else if (udStrEqual(pSettings->maptiles.mapType, "euc-az-roads"))
-  {
-    udStrcpy(pSettings->maptiles.activeServer.tileServerAddress, "https://slippy.vault.euclideon.com/roads/{0}/{1}/{2}.png");
-    udStrcpy(pSettings->maptiles.activeServer.attribution, "\xC2\xA9 1992 - 2020 TomTom");
-    udUUID_GenerateFromString(&pSettings->maptiles.activeServer.tileServerAddressUUID, "https://slippy.vault.euclideon.com/roads");
-  }
-  else // `custom` or not supported
-  {
-    udStrcpy(pSettings->maptiles.activeServer.tileServerAddress, pSettings->maptiles.customServer.tileServerAddress);
-    udStrcpy(pSettings->maptiles.activeServer.attribution, pSettings->maptiles.customServer.attribution);
-    udUUID_GenerateFromString(&pSettings->maptiles.customServer.tileServerAddressUUID, pSettings->maptiles.customServer.tileServerAddress);
+  if (udFile_Load("asset://assets/branding/strings.json", &pBrandStrings) == udR_Success)
+    branding.Parse(pBrandStrings);
 
-    pSettings->maptiles.activeServer.tileServerAddressUUID = pSettings->maptiles.customServer.tileServerAddressUUID;
-  }
+  udStrcpy(pState->branding.appName, branding.Get("appName").AsString("udStream"));
+  udStrcpy(pState->branding.copyrightName, branding.Get("copyright").AsString("Euclideon Pty Ltd"));
+  udStrcpy(pState->branding.supportEmail, branding.Get("supportEmail").AsString("support@euclideon.com"));
+
+  const char* DefaultColours[] = { "45A2B5", "A8D9E3", "71BCCD", "238599" };
+
+  for (size_t i = 0; i < udMin(udLengthOf(pState->branding.colours), udLengthOf(DefaultColours)); ++i)
+    pState->branding.colours[i] = vcIGSW_BGRAToRGBAUInt32(0xFF000000 | udStrAtou(branding.Get("logincolours[%zu]", i).AsString(DefaultColours[i]), nullptr, 16));
+
+  udFree(pBrandStrings);
 }

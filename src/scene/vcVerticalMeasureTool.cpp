@@ -12,6 +12,7 @@
 #include "udFile.h"
 #include "udStringUtil.h"
 #include "vcWebFile.h"
+#include "vcUnitConversion.h"
 
 #include "imgui.h"
 #include "imgui_ex/vcImGuiSimpleWidgets.h"
@@ -28,12 +29,15 @@ vcVerticalMeasureTool::vcVerticalMeasureTool(vcProject *pProject, vdkProjectNode
 
   vcLineRenderer_CreateLine(&m_pLineInstance);
 
+  m_distStraight = 0.0;
+  m_distHoriz = 0.0;
+  m_distVert = 0.0;
+
   for (auto &label: m_labelList)
   {
     label.pText = nullptr;
     label.textColourRGBA = vcIGSW_BGRAToRGBAUInt32(vcIGSW_ImGuiToBGRA(pProgramState->settings.tools.label.textColour));
     label.backColourRGBA = vcIGSW_BGRAToRGBAUInt32(vcIGSW_ImGuiToBGRA(pProgramState->settings.tools.label.backgroundColour));
-    label.textSize = (vcLabelFontSize)pProgramState->settings.tools.label.textSize;
   }
   
 
@@ -90,6 +94,7 @@ void vcVerticalMeasureTool::AddToScene(vcState *pProgramState, vcRenderData *pRe
     pInstance->sceneItemInternalId = 1;
     pInstance->renderFlags = vcRenderPolyInstance::RenderFlags_Transparent;
     pInstance->tint = udFloat4::create(1.0f, 1.0f, 1.0f, 0.65f);
+    pInstance->selectable = m_done;
   }
   
 
@@ -108,6 +113,7 @@ void vcVerticalMeasureTool::AddToScene(vcState *pProgramState, vcRenderData *pRe
       pInstance->sceneItemInternalId = 2;
       pInstance->renderFlags = vcRenderPolyInstance::RenderFlags_Transparent;
       pInstance->tint = udFloat4::create(1.0f, 1.0f, 1.0f, 0.65f);
+      pInstance->selectable = m_done;
     }
 
     for (auto &label : m_labelList)
@@ -117,15 +123,25 @@ void vcVerticalMeasureTool::AddToScene(vcState *pProgramState, vcRenderData *pRe
     m_labelList[1].worldPosition = (m_points[1] + m_points[2]) / 2;
 
     char labelBuf[128] = {};
-    udSprintf(labelBuf, "%s\n%s: %.3f\n%s: %.3f", m_pNode->pName, vcString::Get("sceneStraightDistance"), udMag3(m_points[0] - m_points[2]), vcString::Get("sceneHorizontalDistance"), udMag2(m_points[0] - m_points[2]));
+    char tempBuffer1[128] = {};
+    char tempBuffer2[128] = {};
+
+    vcUnitConversion_ConvertAndFormatDistance(tempBuffer1, 128, m_distStraight, vcDistance_Metres, &pProgramState->settings.unitConversionData);
+    vcUnitConversion_ConvertAndFormatDistance(tempBuffer2, 128, m_distHoriz, vcDistance_Metres, &pProgramState->settings.unitConversionData);
+
+    udSprintf(labelBuf, "%s\n%s: %s\n%s: %s", m_pNode->pName, vcString::Get("sceneStraightDistance"), tempBuffer1, vcString::Get("sceneHorizontalDistance"), tempBuffer2);
     m_labelList[0].pText = udStrdup(labelBuf);
 
     char labelBufVertical[128] = {};
-    udSprintf(labelBufVertical, "%s: %.3f", vcString::Get("sceneVerticalDistance"), udAbs(m_points[0].z - m_points[2].z));
+    vcUnitConversion_ConvertAndFormatDistance(tempBuffer1, 128, m_distVert, vcDistance_Metres, &pProgramState->settings.unitConversionData);
+    udSprintf(labelBufVertical, "%s: %s", vcString::Get("sceneVerticalDistance"), tempBuffer1);
     m_labelList[1].pText = udStrdup(labelBufVertical);
 
     for (auto &label : m_labelList)
+    {
+      label.pSceneItem = this;
       pRenderData->labels.PushBack(&label);
+    }
 
     vcProject_UpdateNodeGeometryFromCartesian(m_pProject, m_pNode, pProgramState->geozone, vdkPGT_LineString, m_points, 3);
     vcLineRenderer_UpdatePoints(m_pLineInstance, m_points, 3, vcIGSW_BGRAToImGui(m_lineColour), m_lineWidth, false);
@@ -145,7 +161,7 @@ void vcVerticalMeasureTool::ApplyDelta(vcState *pProgramState, const udDouble4x4
   vcProject_UpdateNodeGeometryFromCartesian(m_pProject, m_pNode, pProgramState->geozone, vdkPGT_LineString, m_points, 3);
 }
 
-void vcVerticalMeasureTool::HandleImGui(vcState *pProgramState, size_t *pItemID)
+void vcVerticalMeasureTool::HandleSceneExplorerUI(vcState *pProgramState, size_t *pItemID)
 {
   if (ImGui::Checkbox(udTempStr("%s##Select1%zu", vcString::Get("scenePOIMHeightPickStart"), *pItemID), &m_pickStart))
     vdkProjectNode_SetMetadataBool(m_pNode, "pickStart", m_pickStart);
@@ -181,23 +197,49 @@ void vcVerticalMeasureTool::HandleImGui(vcState *pProgramState, size_t *pItemID)
       vdkProjectNode_SetMetadataUint(m_pNode, "backColour", m_textBackgroundBGRA);
     }
 
-    const char *labelSizeOptions[] = { vcString::Get("scenePOILabelSizeNormal"), vcString::Get("scenePOILabelSizeSmall"), vcString::Get("scenePOILabelSizeLarge") };
-    int32_t size = m_labelList[0].textSize;
-    if (ImGui::Combo(udTempStr("%s##VerticalLabelSize%zu", vcString::Get("scenePOILabelSize"), *pItemID), &size, labelSizeOptions, (int)udLengthOf(labelSizeOptions)))
-    {
-      for (auto &label : m_labelList)
-        label.textSize = (vcLabelFontSize)size;
-      vdkProjectNode_SetMetadataInt(m_pNode, "textSize", size);
-    }
-
     if (vcIGSW_InputText(vcString::Get("scenePOILabelDescription"), m_description, sizeof(m_description), ImGuiInputTextFlags_EnterReturnsTrue))
       vdkProjectNode_SetMetadataString(m_pNode, "description", m_description);
 
-    ImGui::Text("%s: %.3f", vcString::Get("sceneStraightDistance"), udMag3(m_points[0] - m_points[2]));
-    ImGui::Text("%s: %.3f", vcString::Get("sceneHorizontalDistance"), udMag2(m_points[0] - m_points[2]));
-    ImGui::Text("%s: %.3f", vcString::Get("sceneVerticalDistance"), udAbs(m_points[0].z - m_points[2].z));
+    char mBuffer[128] = {};
 
+    vcUnitConversion_ConvertAndFormatDistance(mBuffer, 128, m_distStraight, vcDistance_Metres, &pProgramState->settings.unitConversionData);
+    ImGui::Text("%s: %s", vcString::Get("sceneStraightDistance"), mBuffer);
+
+    vcUnitConversion_ConvertAndFormatDistance(mBuffer, 128, m_distHoriz, vcDistance_Metres, &pProgramState->settings.unitConversionData);
+    ImGui::Text("%s: %s", vcString::Get("sceneHorizontalDistance"), mBuffer);
+
+    vcUnitConversion_ConvertAndFormatDistance(mBuffer, 128, m_distVert, vcDistance_Metres, &pProgramState->settings.unitConversionData);
+    ImGui::Text("%s: %s", vcString::Get("sceneVerticalDistance"), mBuffer);
   }
+}
+
+void vcVerticalMeasureTool::HandleSceneEmbeddedUI(vcState *pProgramState)
+{
+  char buffer[128];
+
+  ImGui::Text("%s", vcString::Get("sceneStraightDistance"));
+  ImGui::PushFont(pProgramState->pBigFont);
+  ImGui::Indent();
+  vcUnitConversion_ConvertAndFormatDistance(buffer, udLengthOf(buffer), m_distStraight, vcDistance_Metres, &pProgramState->settings.unitConversionData);
+  ImGui::Text("%s", buffer);
+  ImGui::Unindent();
+  ImGui::PopFont();
+
+  ImGui::Text("%s", vcString::Get("sceneHorizontalDistance"));
+  ImGui::PushFont(pProgramState->pBigFont);
+  ImGui::Indent();
+  vcUnitConversion_ConvertAndFormatDistance(buffer, udLengthOf(buffer), m_distHoriz, vcDistance_Metres, &pProgramState->settings.unitConversionData);
+  ImGui::Text("%s", buffer);
+  ImGui::Unindent();
+  ImGui::PopFont();
+
+  ImGui::Text("%s", vcString::Get("sceneVerticalDistance"));
+  ImGui::PushFont(pProgramState->pBigFont);
+  ImGui::Indent();
+  vcUnitConversion_ConvertAndFormatDistance(buffer, udLengthOf(buffer), m_distVert, vcDistance_Metres, &pProgramState->settings.unitConversionData);
+  ImGui::Text("%s", buffer);
+  ImGui::Unindent();
+  ImGui::PopFont();
 }
 
 void vcVerticalMeasureTool::Cleanup(vcState *pProgramState)
@@ -221,8 +263,13 @@ void vcVerticalMeasureTool::ChangeProjection(const udGeoZone &newZone)
   udDouble3 *pPoints = nullptr;
   int number = 0;
   vcProject_FetchNodeGeometryAsCartesian(m_pProject, m_pNode, newZone, &pPoints, &number);
-  if(number > 0)
-    m_points[0] = pPoints[0];
+
+  // If still previewing only override the first point, if any
+  if (!m_done)
+    number = udMin(1, number);
+
+  for (int i = 0; i < number; ++i)
+    m_points[i] = pPoints[i];
 
   udFree(pPoints);
   pPoints = nullptr;
@@ -241,17 +288,28 @@ void vcVerticalMeasureTool::UpdateIntersectionPosition(vcState *pProgramState)
   if (!HasLine())
     return;
 
-  udDouble3 localStartPoint = udGeoZone_TransformPoint(m_points[0], pProgramState->geozone, pProgramState->activeProject.baseZone);
-  udDouble3 localEndPoint = udGeoZone_TransformPoint(m_points[2], pProgramState->geozone, pProgramState->activeProject.baseZone);
-  udDouble3 direction = localEndPoint - localStartPoint;
-  udDouble3 middle = udDouble3::zero();
-  if (direction.z > 0)
-    middle = udDouble3::create(localStartPoint.x, localStartPoint.y, localEndPoint.z);
+  udDouble3 v_20 = m_points[2] - m_points[0];
+  udDouble3 worldUp = vcGIS_GetWorldLocalUp(pProgramState->geozone, m_points[0]);
+  udDouble3 right = udCross3(v_20, worldUp);
+  udDouble3 forward = udCross3(worldUp, right);
+
+  double len = udMag3(forward);
+  if (len == 0.0)
+  {
+    m_points[1] = m_points[0];
+    return;
+  }
+
+  forward /= len;
+  m_distHoriz = udDot(v_20, forward);
+  m_distVert = udAbs(udDot(v_20, worldUp));
+
+  if (udDot(m_points[0], worldUp) > udDot(m_points[2], worldUp))
+      m_points[1] = m_points[0] + forward * m_distHoriz;
   else
-    middle = udDouble3::create(localEndPoint.x, localEndPoint.y, localStartPoint.z);
+    m_points[1] = m_points[2] - forward * m_distHoriz;
 
-  m_points[1] = udGeoZone_TransformPoint(middle, pProgramState->activeProject.baseZone, pProgramState->geozone);
-
+  m_distStraight = udMag3(m_points[0] - m_points[2]);
 }
 
 bool vcVerticalMeasureTool::HasLine()
@@ -278,7 +336,6 @@ void vcVerticalMeasureTool::UpdateSetting(vcState *pProgramState)
   {
     label.textColourRGBA = textColourRGBA;
     label.backColourRGBA = backColourRGBA;
-    label.textSize = (vcLabelFontSize)size;
   }
 
   vdkProjectNode_GetMetadataUint(m_pNode, "lineColour", &m_lineColour, vcIGSW_ImGuiToBGRA(pProgramState->settings.tools.line.colour));
@@ -290,15 +347,10 @@ void vcVerticalMeasureTool::UpdateSetting(vcState *pProgramState)
   const char *pTemp;
   vdkProjectNode_GetMetadataString(m_pNode, "description", &pTemp, "");
   udStrcpy(m_description, pTemp);
-  
 }
 
 void vcVerticalMeasureTool::HandleToolUI(vcState * pProgramState)
 {
   if (HasLine())
-  {
-    ImGui::PushFont(pProgramState->pBigFont);
-    ImGui::Text("%s: %.3f", vcString::Get("sceneStraightDistance"), udMag3(m_points[0] - m_points[2]));
-    ImGui::PopFont();
-  }  
+    HandleSceneEmbeddedUI(pProgramState);
 }

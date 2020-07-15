@@ -24,7 +24,8 @@ public:
   virtual void OnNodeUpdate(vcState *pProgramState);
   virtual void AddToScene(vcState *pProgramState, vcRenderData *pRenderData);
   virtual void ApplyDelta(vcState *pProgramState, const udDouble4x4 &delta);
-  virtual void HandleImGui(vcState *pProgramState, size_t *pItemID);
+  virtual void HandleSceneExplorerUI(vcState *pProgramState, size_t *pItemID);
+  virtual void HandleSceneEmbeddedUI(vcState *pProgramState);
   virtual void Cleanup(vcState *pProgramState);
   virtual void ChangeProjection(const udGeoZone &newZone);
   virtual udDouble3 GetLocalSpacePivot();
@@ -52,8 +53,11 @@ private:
   uint32_t m_lineColour;
   float m_lineWidth;
 
-  char m_description[vcMaxPathLength];
+  double m_distStraight;
+  double m_distHoriz;
+  double m_distVert;
 
+  char m_description[vcMaxPathLength];
 };
 
 #endif

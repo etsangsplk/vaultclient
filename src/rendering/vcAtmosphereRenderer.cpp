@@ -57,7 +57,6 @@ struct vcAtmosphereRenderer
       udFloat4 earthCenter; // w unused
       udFloat4 sunDirection;// w unused
       udFloat4 sunSize; //zw unused
-      udFloat4 earthNorth; // w unused
     } fragParams;
 
     struct
@@ -71,6 +70,18 @@ struct vcAtmosphereRenderer
 
 constexpr double kSunAngularRadius = 0.00935 / 2.0;
 constexpr double kLengthUnitInMeters = 1.0;
+
+void vcAtmosphere_AsyncLoadWorkerThreadWork(void *pLoadInfo)
+{
+  vcAtmosphereRenderer *pAtmosphereRenderer = (vcAtmosphereRenderer*)pLoadInfo;
+  pAtmosphereRenderer->pModel->LoadPrecomputedTextures();
+}
+
+void vcAtmosphere_AsyncLoadMainThreadWork(void *pLoadInfo)
+{
+  vcAtmosphereRenderer *pAtmosphereRenderer = (vcAtmosphereRenderer*)pLoadInfo;
+  pAtmosphereRenderer->pModel->UploadPrecomputedTextures();
+}
 
 udResult vcAtmosphereRenderer_Create(vcAtmosphereRenderer **ppAtmosphereRenderer, udWorkerPool *pWorkerPool)
 {
@@ -197,7 +208,8 @@ udResult vcAtmosphereRenderer_Create(vcAtmosphereRenderer **ppAtmosphereRenderer
   //  kLengthUnitInMeters, pAtmosphereRenderer->use_luminance == PRECOMPUTED ? 15 : 3,
   //  true, use_half_precision_);
 
-  UD_ERROR_IF(!pAtmosphereRenderer->pModel->LoadPrecomputedTextures(), udR_InternalError);
+
+  udWorkerPool_AddTask(pWorkerPool, vcAtmosphere_AsyncLoadWorkerThreadWork, pAtmosphereRenderer, false, vcAtmosphere_AsyncLoadMainThreadWork);
 
   if (do_white_balance_) {
     atmosphere::Model::ConvertSpectrumToLinearSrgb(wavelengths, solar_irradiance,
@@ -345,6 +357,10 @@ void vcAtmosphereRenderer_SetVisualParams(vcState *pProgramState, vcAtmosphereRe
   }
 
   pAtmosphereRenderer->sunDirection = udNormalize(pAtmosphereRenderer->sunDirection);
+
+  // TEMP HACK, until atmosphere shader paras are accessible to voxel shaders
+  extern udFloat3 g_globalSunDirection;
+  g_globalSunDirection = udFloat3::create(pAtmosphereRenderer->sunDirection);
 }
 
 bool vcAtmosphereRenderer_Render(vcAtmosphereRenderer *pAtmosphereRenderer, vcState *pProgramState, vcTexture *pSceneColour, vcTexture *pSceneNormal, vcTexture *pSceneDepth)
@@ -398,9 +414,6 @@ bool vcAtmosphereRenderer_Render(vcAtmosphereRenderer *pAtmosphereRenderer, vcSt
   pAtmosphereRenderer->renderShader.fragParams.camera.y = (float)pProgramState->camera.position.y;
   pAtmosphereRenderer->renderShader.fragParams.camera.z = (float)pProgramState->camera.position.z;
   pAtmosphereRenderer->renderShader.fragParams.camera.w = (float)(pAtmosphereRenderer->use_luminance != NONE ? pAtmosphereRenderer->exposure * 1e-5 : pAtmosphereRenderer->exposure);
-  pAtmosphereRenderer->renderShader.fragParams.earthNorth.x = (float)pProgramState->camera.cameraNorth.x;
-  pAtmosphereRenderer->renderShader.fragParams.earthNorth.y = (float)pProgramState->camera.cameraNorth.y;
-  pAtmosphereRenderer->renderShader.fragParams.earthNorth.z = (float)pProgramState->camera.cameraNorth.z;
 
   pAtmosphereRenderer->renderShader.fragParams.sunDirection = udFloat4::create(udFloat3::create(pAtmosphereRenderer->sunDirection), 0);
 

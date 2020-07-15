@@ -163,6 +163,7 @@ void vcQuadTree_CalculateNodeBounds(vcQuadTree *pQuadTree, vcQuadTreeNode *pNode
     vcGIS_SlippyToLocal(pQuadTree->geozone, &pNode->worldBounds[edge], slippySampleCoord, pNode->slippyPosition.z + 1);
 
     pNode->worldNormals[edge] = vcGIS_GetWorldLocalUp(pQuadTree->geozone, pNode->worldBounds[edge]);
+    pNode->worldBitangents[edge] = vcGIS_GetWorldLocalNorth(pQuadTree->geozone, pNode->worldBounds[edge]);
   }
 
   vcQuadTree_CalculateNodeAABB(pQuadTree, pNode);
@@ -184,6 +185,7 @@ void vcQuadTree_InitNode(vcQuadTree *pQuadTree, uint32_t slotIndex, const udInt3
   vcQuadTreeNode *pNode = &pQuadTree->nodes.pPool[slotIndex];
 
   pNode->isUsed = true;
+  pNode->serverId = pQuadTree->serverId;
   pNode->childBlockIndex = INVALID_NODE_INDEX;
   pNode->parentIndex = INVALID_NODE_INDEX;
   pNode->slippyPosition = childSlippy;
@@ -334,6 +336,7 @@ void vcQuadTree_CleanupNodes(vcQuadTree *pQuadTree)
 
 void vcQuadTree_Create(vcQuadTree *pQuadTree, vcSettings *pSettings)
 {
+  pQuadTree->serverId = 0;
   pQuadTree->nodes.capacity = 1024; // best guess, should hold enough nodes for usage
   vcQuadTree_ExpandCapacity(pQuadTree);
 
@@ -353,7 +356,7 @@ void vcQuadTree_Destroy(vcQuadTree *pQuadTree)
 
 void vcQuadTree_Reset(vcQuadTree *pQuadTree)
 {
-  vcQuadTree_CleanupNodes(pQuadTree);
+  pQuadTree->serverId++;
 
   memset(&pQuadTree->metaData, 0, sizeof(vcQuadTreeMetaData));
   pQuadTree->completeRerootRequired = true;
@@ -560,7 +563,10 @@ bool vcQuadTree_ShouldFreeBlock(vcQuadTree *pQuadTree, uint32_t blockIndex)
   for (uint32_t c = 0; c < NodeChildCount; ++c)
   {
     vcQuadTreeNode *pChildNode = &pQuadTree->nodes.pPool[blockIndex + c];
-    if (pChildNode->touched || pChildNode->colourInfo.loadStatus.Get() == vcNodeRenderInfo::vcTLS_Downloading || pChildNode->demInfo.loadStatus.Get() == vcNodeRenderInfo::vcTLS_Downloading)
+    if (pChildNode->colourInfo.loadStatus.Get() == vcNodeRenderInfo::vcTLS_Downloading || pChildNode->demInfo.loadStatus.Get() == vcNodeRenderInfo::vcTLS_Downloading)
+      return false;
+
+    if (pChildNode->touched && (pChildNode->serverId == pQuadTree->serverId))
       return false;
   }
 

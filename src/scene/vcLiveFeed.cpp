@@ -156,7 +156,8 @@ void vcLiveFeed_UpdateFeed(void *pUserData)
 
         udLockMutex(pInfo->pFeed->m_pMutex);
 
-        for (size_t j = 0; j < pInfo->pFeed->m_feedItems.length; ++j)
+        size_t j = 0;
+        for (; j < pInfo->pFeed->m_feedItems.length; ++j)
         {
           vcLiveFeedItem *pCachedFeedItem = pInfo->pFeed->m_feedItems[j];
 
@@ -251,16 +252,9 @@ void vcLiveFeed_UpdateFeed(void *pUserData)
 
               udFree(lodRef.pLabelText);
               lodRef.pLabelText = udStrdup(labelObj.Get("text").AsString("[?]"));
-
-              const char *pTextSize = labelObj.Get("size").AsString();
-              if (udStrEquali(pTextSize, "x-small") || udStrEquali(pTextSize, "small"))
-                lodRef.pLabelInfo->textSize = vcLFS_Small;
-              else if (udStrEquali(pTextSize, "large") || udStrEquali(pTextSize, "x-large"))
-                lodRef.pLabelInfo->textSize = vcLFS_Large;
-              else
-                lodRef.pLabelInfo->textSize = vcLFS_Medium;
-
               lodRef.pLabelInfo->pText = lodRef.pLabelText;
+              lodRef.pLabelInfo->pSceneItem = pInfo->pFeed;
+              lodRef.pLabelInfo->sceneItemInternalId = j + 1;
             }
 
             const udJSON &pinObj = pLOD->Get("pin");
@@ -466,7 +460,7 @@ void vcLiveFeed::AddToScene(vcState *pProgramState, vcRenderData *pRenderData)
             worldTransform = udDouble4x4::rotationQuat(worldRotation, pFeedItem->displayPosition);
           }
 
-          pRenderData->polyModels.PushBack({ vcRenderPolyInstance::RenderType_Polygon, vcRenderPolyInstance::RenderFlags_None, { pModel }, worldTransform, nullptr, udFloat4::one(), vcGLSCM_Back, this, (uint64_t)(i + 1) });
+          pRenderData->polyModels.PushBack({ vcRenderPolyInstance::RenderType_Polygon, vcRenderPolyInstance::RenderFlags_None, { pModel }, worldTransform, nullptr, udFloat4::one(), vcGLSCM_Back, true, this, (uint64_t)(i + 1) });
         }
       }
 
@@ -477,7 +471,7 @@ void vcLiveFeed::AddToScene(vcState *pProgramState, vcRenderData *pRenderData)
       }
 
       if (lodRef.pPinIcon != nullptr)
-        pRenderData->pins.PushBack({ pFeedItem->displayPosition, lodRef.pPinIcon, 1 });
+        pRenderData->pins.PushBack({ pFeedItem->displayPosition, lodRef.pPinIcon, 1, this });
 
       break; // We got to the end so we should stop
     }
@@ -492,7 +486,7 @@ void vcLiveFeed::ApplyDelta(vcState * /*pProgramState*/, const udDouble4x4 & /*d
   // Do nothing
 }
 
-void vcLiveFeed::HandleImGui(vcState *pProgramState, size_t * /*pItemID*/)
+void vcLiveFeed::HandleSceneExplorerUI(vcState *pProgramState, size_t * /*pItemID*/)
 {
   if (pProgramState->settings.presentation.showDiagnosticInfo)
   {

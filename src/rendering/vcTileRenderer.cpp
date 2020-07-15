@@ -114,11 +114,12 @@ struct vcTileRenderer
       udFloat4x4 projectionMatrix;
       udFloat4x4 viewMatrix;
       udFloat4 eyePositions[TileVertexControlPointRes * TileVertexControlPointRes];
-      udFloat4 eyeNormals[TileVertexControlPointRes * TileVertexControlPointRes];
       udFloat4 colour;
-      udFloat4 objectInfo; // objectId.x
+      udFloat4 objectInfo; // objectId.x, tileSkirtLength
       udFloat4 uvOffsetScale;
       udFloat4 demUVOffsetScale;
+      udFloat4 worldNormals[TileVertexControlPointRes * TileVertexControlPointRes];
+      udFloat4 worldBitangents[TileVertexControlPointRes * TileVertexControlPointRes];
     } everyObject;
   } presentShader;
 };
@@ -176,11 +177,21 @@ epilogue:
 // This functionality here for now until the cache module is implemented
 bool vcTileRenderer_CacheHasData(const char *pLocalURL)
 {
+#if UDPLATFORM_EMSCRIPTEN
+  udUnused(pLocalURL);
+  return false;
+#else
   return udFileExists(pLocalURL) == udR_Success;
+#endif
 }
 
 void vcTileRenderer_CacheDataToDisk(const char *pFilename, void *pData, int64_t dataLength)
 {
+#if UDPLATFORM_EMSCRIPTEN
+  udUnused(pFilename);
+  udUnused(pData);
+  udUnused(dataLength);
+#else
   if (pData == nullptr || dataLength == 0)
     return;
 
@@ -195,6 +206,7 @@ void vcTileRenderer_CacheDataToDisk(const char *pFilename, void *pData, int64_t 
     if (vcTileRenderer_CreateDirRecursive(localFolderPath) == udR_Success)
       vcTileRenderer_TryWriteTile(pFilename, pData, dataLength);
   }
+#endif
 }
 
 udResult vcTileRenderer_HandleTileDownload(vcNodeRenderInfo *pRenderNodeInfo, const char *pRemoteURL, const char *pLocalURL)
@@ -1017,7 +1029,7 @@ void vcTileRenderer_UpdateTextureQueuesRecursive(vcTileRenderer *pTileRenderer, 
   }
 }
 
-void vcTileRenderer_UpdateTextureQueues(vcTileRenderer *pTileRenderer)
+void vcTileRenderer_UpdateTextureQueues(vcTileRenderer *pTileRenderer, bool *pIsLoading)
 {
   // invalidate current queue
   for (size_t i = 0; i < pTileRenderer->cache.tileLoadList.length; ++i)
@@ -1036,6 +1048,9 @@ void vcTileRenderer_UpdateTextureQueues(vcTileRenderer *pTileRenderer)
   for (int i = 0; i < (int)pTileRenderer->cache.tileLoadList.length; ++i)
   {
     vcQuadTreeNode *pNode = pTileRenderer->cache.tileLoadList[i];
+
+    *pIsLoading |= pNode->visible;
+
     if (!pNode->touched || (!pNode->colourInfo.tryLoad && !pNode->demInfo.tryLoad))
     {
       pNode->colourInfo.loadStatus.TestAndSet(vcNodeRenderInfo::vcTLS_None, vcNodeRenderInfo::vcTLS_InQueue);
@@ -1046,7 +1061,7 @@ void vcTileRenderer_UpdateTextureQueues(vcTileRenderer *pTileRenderer)
   }
 }
 
-void vcTileRenderer_Update(vcTileRenderer *pTileRenderer, const double deltaTime, udGeoZone *pGeozone, const udInt3 &slippyCoords, const udDouble3 &cameraWorldPos, const bool cameraIsUnderMapSurface, const udDouble3& cameraZeroAltitude, const udDouble4x4 &viewProjectionMatrix)
+void vcTileRenderer_Update(vcTileRenderer *pTileRenderer, const double deltaTime, udGeoZone *pGeozone, const udInt3 &slippyCoords, const udDouble3 &cameraWorldPos, const bool cameraIsUnderMapSurface, const udDouble3& cameraZeroAltitude, const udDouble4x4 &viewProjectionMatrix, bool *pIsLoading)
 {
   pTileRenderer->frameDeltaTime = (float)deltaTime;
   pTileRenderer->totalTime += pTileRenderer->frameDeltaTime;
@@ -1077,7 +1092,7 @@ void vcTileRenderer_Update(vcTileRenderer *pTileRenderer, const double deltaTime
   }
 
   udLockMutex(pTileRenderer->cache.pMutex);
-  vcTileRenderer_UpdateTextureQueues(pTileRenderer);
+  vcTileRenderer_UpdateTextureQueues(pTileRenderer, pIsLoading);
   udReleaseMutex(pTileRenderer->cache.pMutex);
 }
 
@@ -1103,9 +1118,10 @@ void vcTileRenderer_DrawNode(vcTileRenderer *pTileRenderer, vcQuadTreeNode *pNod
   {
     udDouble3 mapHeightOffset = pNode->worldNormals[t] * udDouble3::create(pTileRenderer->pSettings->maptiles.mapHeight);
     udFloat4 eyeSpacePosition = udFloat4::create(view * udDouble4::create(pNode->worldBounds[t] + mapHeightOffset, 1.0));
-    udFloat4 eyeSpaceNormal = udFloat4::create(view * udDouble4::create(pNode->worldNormals[t], 0.0));
     pTileRenderer->presentShader.everyObject.eyePositions[t] = eyeSpacePosition;
-    pTileRenderer->presentShader.everyObject.eyeNormals[t] = eyeSpaceNormal;
+
+    pTileRenderer->presentShader.everyObject.worldNormals[t] = udFloat4::create(udFloat3::create(pNode->worldNormals[t]), 0.0f);
+    pTileRenderer->presentShader.everyObject.worldBitangents[t] = udFloat4::create(udFloat3::create(pNode->worldBitangents[t]), 0.0f);
   }
 
   udFloat2 size = pNode->colourInfo.drawInfo.uvEnd - pNode->colourInfo.drawInfo.uvStart;
@@ -1248,6 +1264,8 @@ void vcTileRenderer_Render(vcTileRenderer *pTileRenderer, const udDouble4x4 &vie
   pTileRenderer->quadTree.metaData.visibleNodeCount = 0;
   pTileRenderer->quadTree.metaData.nodeRenderCount = 0;
 
+  float tileSkirtLength = 3000000.0f; // TODO: Read actual planet radius
+
   vcGLStateCullMode cullMode = vcGLSCM_Back;
   if (cameraInsideGround)
     cullMode = vcGLSCM_Front;
@@ -1256,23 +1274,28 @@ void vcTileRenderer_Render(vcTileRenderer *pTileRenderer, const udDouble4x4 &vie
   vcGLState_SetDepthStencilMode(vcGLSDM_LessOrEqual, true);
 
   if (pTileRenderer->pSettings->maptiles.transparency < 1.0f)
+  {
     vcGLState_SetBlendMode(vcGLSBM_Interpolative);
+    tileSkirtLength = 0.0f;
+  }
 
   if (pTileRenderer->pSettings->maptiles.blendMode == vcMTBM_Overlay)
   {
     vcGLState_SetDepthStencilMode(vcGLSDM_Always, true);
+    tileSkirtLength = 0.0f;
   }
   else if (pTileRenderer->pSettings->maptiles.blendMode == vcMTBM_Underlay)
   {
     // almost at the back, so it can still 'occlude' the skybox
     vcGLState_SetViewportDepthRange(0.999f, 0.999f);
+    tileSkirtLength = 0.0f;
   }
 
   vcShader_Bind(pTileRenderer->presentShader.pProgram);
   pTileRenderer->presentShader.everyObject.projectionMatrix = udFloat4x4::create(proj);
   pTileRenderer->presentShader.everyObject.viewMatrix = udFloat4x4::create(view);
 
-  pTileRenderer->presentShader.everyObject.objectInfo = udFloat4::create(encodedObjectId, (pTileRenderer->cameraIsUnderMapSurface ? -1.0f : 1.0f), 0, 0);
+  pTileRenderer->presentShader.everyObject.objectInfo = udFloat4::create(encodedObjectId, (pTileRenderer->cameraIsUnderMapSurface ? -1.0f : 1.0f) * tileSkirtLength, 0, 0);
   pTileRenderer->presentShader.everyObject.colour = udFloat4::create(1.f, 1.f, 1.f, pTileRenderer->pSettings->maptiles.transparency);
 
   vcTileRenderer_RecursiveRenderNodes(pTileRenderer, view, pRootNode, nullptr, nullptr);

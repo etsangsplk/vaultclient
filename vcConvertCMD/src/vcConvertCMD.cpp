@@ -13,14 +13,14 @@
 #include <inttypes.h>
 
 #ifdef GIT_BUILD
-#  define CONVERTCMD_VERSION "0.2.0." UDSTRINGIFY(GIT_BUILD)
+#  define CONVERTCMD_VERSION "1.0." UDSTRINGIFY(GIT_BUILD)
 #else
-#  define CONVERTCMD_VERSION "0.2.0.DEVELOPER BUILD / DO NOT DISTRIBUTE"
+#  define CONVERTCMD_VERSION "1.0.DEVELOPER BUILD / DO NOT DISTRIBUTE"
 #endif
 
 void vcConvertCMD_ShowOptions()
 {
-  printf("Usage: vaultConvertCMD [vault server] [username] [password] [options] -i inputfile [-i anotherInputFile] -o outputfile.uds\n");
+  printf("Usage: udStreamConvertCMD [udStream server] [username] [password] [options] -i inputfile [-i anotherInputFile] -o outputfile.uds\n");
   printf("   -resolution <res>           - override the resolution (0.01 = 1cm, 0.001 = 1mm)\n");
   printf("   -srid <sridCode>            - override the srid code for geolocation\n");
   printf("   -globalOffset <x,y,z>       - add an offset to all points, no spaces allowed in the x,y,z value\n");
@@ -29,8 +29,8 @@ void vcConvertCMD_ShowOptions()
   printf("   -proxyURL <url>             - Set the proxy URL\n");
   printf("   -proxyUsername <username>   - Set the username to use with the proxy\n");
   printf("   -proxyPassword <password>   - Set the password to use with the proxy\n");
-  printf("   -watermark <filename>       - Use the supplied image file as the watermark\n");
   printf("   -copyright <details>        - Adds the copyright information to the \"Copyright\" metadata field\n");
+  printf("   -quicktest                  - Does a small test to test if positioning/geolocation is correct\n");
 }
 
 struct vcConvertData
@@ -54,7 +54,6 @@ uint32_t vcConvertCMD_DoConvert(void *pDataPtr)
 struct vcConvertCMDSettings
 {
   double resolution;
-  const char *pWatermark;
   const char *pOutputFilename;
   const char *pProxyURL;
   const char *pProxyUsername;
@@ -64,6 +63,7 @@ struct vcConvertCMDSettings
   bool pause;
   bool pauseOnError;
   bool autoOverwrite;
+  bool quicktest;
 
   const char *pCopyright;
 
@@ -103,11 +103,6 @@ bool vcConvertCMD_ProcessCommandLine(int argc, const char **ppArgv, vcConvertCMD
       }
       i += 2;
     }
-    else if (udStrEquali(ppArgv[i], "-watermark"))
-    {
-      pSettings->pWatermark = ppArgv[i + 1];
-      i += 2;
-    }
     else if (udStrEquali(ppArgv[i], "-i"))
     {
       ++i; // Skip "-i"
@@ -124,6 +119,12 @@ bool vcConvertCMD_ProcessCommandLine(int argc, const char **ppArgv, vcConvertCMD
     else if (udStrEquali(ppArgv[i], "-pauseOnError"))
     {
       pSettings->pauseOnError = true;
+      ++i;
+    }
+    else if (udStrEquali(ppArgv[i], "-quicktest"))
+    {
+      printf("Quicktest!\n");
+      pSettings->quicktest = true;
       ++i;
     }
     else if (udStrEquali(ppArgv[i], "-o"))
@@ -176,7 +177,7 @@ int main(int argc, const char **ppArgv)
 
   settings.files.Init(256);
 
-  printf("vaultConvertCMD %s\n", CONVERTCMD_VERSION);
+  printf("udStreamConvertCMD %s\n", CONVERTCMD_VERSION);
 
   if (argc < 4)
   {
@@ -221,13 +222,6 @@ int main(int argc, const char **ppArgv)
     exit(3);
   }
 
-  result = vdkContext_RequestLicense(pContext, vdkLT_Convert);
-  if (result != vE_Success)
-  {
-    printf("No licenses available");
-    exit(4);
-  }
-
   vdkConvert_GetInfo(pModel, &pInfo);
 
   // Process settings
@@ -252,9 +246,9 @@ int main(int argc, const char **ppArgv)
     }
   }
 
-  if (settings.pWatermark)
+  if (settings.quicktest)
   {
-    if (vdkConvert_AddWatermark(pModel, settings.pWatermark) != vE_Success)
+    if (vdkConvert_SetEveryNth(pModel, 1000) != vE_Success)
       cmdlineError = true;
   }
 
@@ -324,15 +318,24 @@ int main(int argc, const char **ppArgv)
 
     printf("\tOutput: %s\n", pInfo->pOutputName);
     printf("\tTemp: %s\n", pInfo->pTempFilesPrefix);
-    printf("\t# Inputs: %" PRIu64 "\n\n", pInfo->totalItems);
+    printf("\tTotal Input Files: %" PRIu64 "\n\n", pInfo->totalItems);
 
     udThread_Create(nullptr, vcConvertCMD_DoConvert, &convdata);
 
     vdkConvertItemInfo itemInfo = {};
 
+    uint64_t previousItem = UINT64_MAX;
+
     while (!convdata.ended)
     {
       uint64_t currentItem = pInfo->currentInputItem; // Just copying this for thread safety
+
+      if (currentItem == previousItem)
+        printf("\r");
+      else
+        printf("\n");
+
+      previousItem = currentItem;
 
       if (currentItem < pInfo->totalItems)
       {

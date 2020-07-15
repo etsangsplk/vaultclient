@@ -21,6 +21,7 @@ struct vcTexture;
 struct vcState;
 struct vcFenceRenderer;
 struct vcPolygonModel;
+struct vcUnitConversionData;
 
 struct vcLineInfo
 {
@@ -44,15 +45,16 @@ class vcPOI : public vcSceneItem
   friend class vcPOIState_MeasureArea;
 private:
   vcLineInfo m_line; // TODO: 1452
+  uint32_t m_measurementAreaFillColour;
   uint32_t m_nameColour;
   uint32_t m_backColour;
-  vcLabelFontSize m_namePt;
   char m_hyperlink[vcMaxPathLength];
   char m_description[vcMaxPathLength];
 
   bool m_showArea;
   bool m_showLength;
   bool m_showAllLengths;
+  bool m_showFill;
 
   double m_totalLength;
   double m_area;
@@ -96,6 +98,8 @@ private:
 
   void HandleBasicUI(vcState *pProgramState, size_t itemID);
 
+  vcState *m_pProgramState;
+
 public:
   vcPOI(vcProject *pProject, vdkProjectNode *pNode, vcState *pProgramState);
   ~vcPOI();
@@ -105,7 +109,8 @@ public:
   void AddToScene(vcState *pProgramState, vcRenderData *pRenderData);
   void ApplyDelta(vcState *pProgramState, const udDouble4x4 &delta);
 
-  void HandleImGui(vcState *pProgramState, size_t *pItemID);
+  void HandleSceneExplorerUI(vcState *pProgramState, size_t *pItemID);
+  void HandleSceneEmbeddedUI(vcState *pProgramState);
   void HandleContextMenu(vcState *pProgramState);
   void HandleAttachmentUI(vcState *pProgramState);
   void HandleToolUI(vcState *pProgramState);
@@ -124,17 +129,18 @@ public:
   bool IsSubitemSelected(uint64_t internalId);
 
 private:
+  void RebuildSceneLabel(const vcUnitConversionData *pConversionData);
   void InsertPoint(const udDouble3 &position);
-  void CalculateArea();
+  void CalculateArea(const udDouble4 &projectionPlane);
   void CalculateTotalLength();
   void CalculateCentroid();
-  void AddLengths();
+  void AddLengths(const vcUnitConversionData *pConversionData);
   void UpdateState(vcState *pProgramState);
   double DistanceToPoint(udDouble3 const &point);
   vcRenderPolyInstance *AddNodeToRenderData(vcState *pProgramState, vcRenderData *pRenderData, size_t i);
   bool IsVisible(vcState *pProgramState);
   void AddFenceToScene(vcRenderData *pRenderData);
-  void AddLabelsToScene(vcRenderData *pRenderData);
+  void AddLabelsToScene(vcRenderData *pRenderData, const vcUnitConversionData *pConversionData);
   void AddFillPolygonToScene(vcState *pProgramState, vcRenderData *pRenderData);
   void AddAttachedModelsToScene(vcState *pProgramState, vcRenderData *pRenderData);
   void DoFlythrough(vcState *pProgramState);

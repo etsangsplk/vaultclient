@@ -88,6 +88,7 @@ void vcPlaceLayer::AddToScene(vcState *pProgramState, vcRenderData *pRenderData)
       m_closeLabels[usedLabels].pText = m_places[i].pName;
       m_closeLabels[usedLabels].backColourRGBA = 0xFF000000;
       m_closeLabels[usedLabels].textColourRGBA = 0xFFFFFFFF;
+      m_closeLabels[usedLabels].pSceneItem = this;
 
       udDouble3 points[] = { m_places[i].localSpace, m_closeLabels[usedLabels].worldPosition };
       vcLineRenderer_UpdatePoints(m_closeLines[usedLabels], points, 2, udFloat4::one(), 5, false);
@@ -99,7 +100,7 @@ void vcPlaceLayer::AddToScene(vcState *pProgramState, vcRenderData *pRenderData)
     }
     else if (distSq < m_pinDistance * m_pinDistance)
     {
-      pRenderData->pins.PushBack({ m_places[i].localSpace, m_pPinIcon, m_places[i].count });
+      pRenderData->pins.PushBack({ m_places[i].localSpace, m_pPinIcon, m_places[i].count, this });
     }
   }
 }
@@ -109,7 +110,7 @@ void vcPlaceLayer::ApplyDelta(vcState * /*pProgramState*/, const udDouble4x4 & /
   // Does nothing
 }
 
-void vcPlaceLayer::HandleImGui(vcState * /*pProgramState*/, size_t *pItemID)
+void vcPlaceLayer::HandleSceneExplorerUI(vcState * /*pProgramState*/, size_t *pItemID)
 {
   double min = 0;
   double maxLabel = 50000;

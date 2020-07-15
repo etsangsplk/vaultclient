@@ -50,6 +50,7 @@ void vcViewShed::AddToScene(vcState *pProgramState, vcRenderData *pRenderData)
     pInstance->worldMat = udDouble4x4::translation(m_position) * udDouble4x4::scaleUniform(udMag3(linearDistance) / 100.0); //This makes it ~1/100th of the screen size
     pInstance->pSceneItem = this;
     pInstance->pDiffuseOverride = pProgramState->pWhiteTexture;
+    pInstance->selectable = false;
   }
 
   vcViewShedData *pViewShed = pRenderData->viewSheds.PushBack();
@@ -66,7 +67,7 @@ void vcViewShed::ApplyDelta(vcState *pProgramState, const udDouble4x4 &delta)
   vcProject_UpdateNodeGeometryFromCartesian(m_pProject, m_pNode, pProgramState->geozone, vdkPGT_Point, &m_position, 1);
 }
 
-void vcViewShed::HandleImGui(vcState * /*pProgramState*/, size_t *pItemID)
+void vcViewShed::HandleSceneExplorerUI(vcState * /*pProgramState*/, size_t *pItemID)
 {
   if (ImGui::SliderScalarN(udTempStr("%s##viewShedHiddenColor%zu", vcString::Get("viewShedDistance"), *pItemID), ImGuiDataType_Double, &m_distance, 1, &DistMin, &DistMax))
     vdkProjectNode_SetMetadataDouble(m_pNode, "distance", m_distance);
@@ -75,6 +76,18 @@ void vcViewShed::HandleImGui(vcState * /*pProgramState*/, size_t *pItemID)
     vdkProjectNode_SetMetadataUint(m_pNode, "visibleColour", m_visibleColour);
 
   if (vcIGSW_ColorPickerU32(udTempStr("%s##viewShedHiddenColor%zu", vcString::Get("viewShedHiddenColour"), *pItemID), &m_hiddenColour, ImGuiColorEditFlags_None))
+    vdkProjectNode_SetMetadataUint(m_pNode, "hiddenColour", m_hiddenColour);
+}
+
+void vcViewShed::HandleSceneEmbeddedUI(vcState * /*pProgramState*/)
+{
+  if (ImGui::SliderScalarN(udTempStr("%s##EmbeddedUIViewShed", vcString::Get("viewShedDistance")), ImGuiDataType_Double, &m_distance, 1, &DistMin, &DistMax))
+    vdkProjectNode_SetMetadataDouble(m_pNode, "distance", m_distance);
+
+  if (vcIGSW_ColorPickerU32(udTempStr("%s##EmbeddedUIViewShed", vcString::Get("viewShedVisibleColour")), &m_visibleColour, ImGuiColorEditFlags_None))
+    vdkProjectNode_SetMetadataUint(m_pNode, "visibleColour", m_visibleColour);
+
+  if (vcIGSW_ColorPickerU32(udTempStr("%s##EmbeddedUIViewShed", vcString::Get("viewShedHiddenColour")), &m_hiddenColour, ImGuiColorEditFlags_None))
     vdkProjectNode_SetMetadataUint(m_pNode, "hiddenColour", m_hiddenColour);
 }
 

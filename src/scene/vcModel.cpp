@@ -332,8 +332,8 @@ void vcModel::OnNodeUpdate(vcState *pProgramState)
 
   for (uint32_t i = 0; i < vcVisualizationSettings::s_maxReturnNumbers; ++i)
   {
-    vdkProjectNode_GetMetadataUint(m_pNode, "visualization.returnNumberColours[i]", &m_visualization.returnNumberColours[i], pProgramState->settings.visualization.returnNumberColours[i]);
-    vdkProjectNode_GetMetadataUint(m_pNode, "visualization.numberOfReturnsColours[i]", &m_visualization.numberOfReturnsColours[i], pProgramState->settings.visualization.numberOfReturnsColours[i]);
+    vdkProjectNode_GetMetadataUint(m_pNode, udTempStr("visualization.returnNumberColours[%u]", i), &m_visualization.returnNumberColours[i], pProgramState->settings.visualization.returnNumberColours[i]);
+    vdkProjectNode_GetMetadataUint(m_pNode, udTempStr("visualization.numberOfReturnsColours[%u]", i), &m_visualization.numberOfReturnsColours[i], pProgramState->settings.visualization.numberOfReturnsColours[i]);
   }
 
   m_visualization.displacement.bounds = udFloat2::create((float)displacement.x, (float)displacement.y);
@@ -404,7 +404,7 @@ void vcModel::ApplyDelta(vcState *pProgramState, const udDouble4x4 &delta)
   }
 }
 
-void vcModel::HandleImGui(vcState *pProgramState, size_t * /*pItemID*/)
+void vcModel::HandleSceneExplorerUI(vcState *pProgramState, size_t * /*pItemID*/)
 {
   ImGui::TextWrapped("Path: %s", m_pNode->pURI);
 
@@ -420,7 +420,12 @@ void vcModel::HandleImGui(vcState *pProgramState, size_t * /*pItemID*/)
   ImGui::InputScalarN(vcString::Get("sceneModelPosition"), ImGuiDataType_Double, &position.x, 3);
 
   if (ImGui::IsItemDeactivatedAfterEdit())
+  {
     repackMatrix = true;
+    static udDouble3 minDouble = udDouble3::create(-1e7, -1e7, -1e7);
+    static udDouble3 maxDouble = udDouble3::create(1e7, 1e7, 1e7);
+    position = udClamp(position, minDouble, maxDouble);
+  }    
 
   udDouble3 eulerRotation = UD_RAD2DEG(orientation.eulerAngles());
   ImGui::InputScalarN(vcString::Get("sceneModelRotation"), ImGuiDataType_Double, &eulerRotation.x, 3);
@@ -566,6 +571,34 @@ void vcModel::HandleImGui(vcState *pProgramState, size_t * /*pItemID*/)
   }
 
   vcImGuiValueTreeObject(&m_metadata);
+}
+
+void vcModel::HandleSceneEmbeddedUI(vcState * /*pProgramState*/)
+{
+  if (vcSettingsUI_VisualizationSettings(&m_visualization))
+  {
+    vdkProjectNode_SetMetadataInt(m_pNode, "visualization.mode", m_visualization.mode);
+    //Set all here
+    vdkProjectNode_SetMetadataInt(m_pNode, "visualization.minIntensity", m_visualization.minIntensity);
+    vdkProjectNode_SetMetadataInt(m_pNode, "visualization.maxIntensity", m_visualization.maxIntensity);
+    vdkProjectNode_SetMetadataDouble(m_pNode, "visualization.displacement.x", m_visualization.displacement.bounds.x);
+    vdkProjectNode_SetMetadataDouble(m_pNode, "visualization.displacement.y", m_visualization.displacement.bounds.y);
+    vdkProjectNode_SetMetadataUint(m_pNode, "visualization.displacement.minColour", m_visualization.displacement.min);
+    vdkProjectNode_SetMetadataUint(m_pNode, "visualization.displacement.maxColour", m_visualization.displacement.max);
+    vdkProjectNode_SetMetadataUint(m_pNode, "visualization.displacement.errorColour", m_visualization.displacement.error);
+    vdkProjectNode_SetMetadataUint(m_pNode, "visualization.displacement.midColour", m_visualization.displacement.mid);
+    vdkProjectNode_SetMetadataDouble(m_pNode, "visualization.GPSTime.minTime", m_visualization.GPSTime.minTime);
+    vdkProjectNode_SetMetadataDouble(m_pNode, "visualization.GPSTime.maxTime", m_visualization.GPSTime.maxTime);
+    vdkProjectNode_SetMetadataDouble(m_pNode, "visualization.scanAngle.minAngle", m_visualization.scanAngle.minAngle);
+    vdkProjectNode_SetMetadataDouble(m_pNode, "visualization.scanAngle.maxAngle", m_visualization.scanAngle.maxAngle);
+    vdkProjectNode_SetMetadataUint(m_pNode, "visualization.pointSourceID.defaultColour", m_visualization.pointSourceID.defaultColour);
+
+    for (uint32_t i = 0; i < vcVisualizationSettings::s_maxReturnNumbers; ++i)
+    {
+      vdkProjectNode_SetMetadataUint(m_pNode, udTempStr("visualization.returnNumberColours[%u]", i), m_visualization.returnNumberColours[i]);
+      vdkProjectNode_SetMetadataUint(m_pNode, udTempStr("visualization.numberOfReturnsColours[%u]", i), m_visualization.numberOfReturnsColours[i]);
+    }
+  }
 }
 
 void vcModel::ContextMenuListModels(vcState *pProgramState, vdkProjectNode *pParentNode, vcSceneItem **ppCurrentSelectedModel, const char *pProjectNodeType, bool allowEmpty)
@@ -813,18 +846,10 @@ void vcModel::HandleContextMenu(vcState *pProgramState)
 #endif //VC_HASCONVERT
 }
 
-void vcModel::Cleanup(vcState *pProgramState)
+void vcModel::Cleanup(vcState * /*pProgramState*/)
 {
   vdkPointCloud_Unload(&m_pPointCloud);
   udFree(m_pCurrentZone);
-
-  if (m_pWatermark != nullptr)
-  {
-    if (pProgramState->pSceneWatermark == m_pWatermark)
-      pProgramState->pSceneWatermark = nullptr;
-
-    vcTexture_Destroy(&m_pWatermark);
-  }
 
   m_visualization.pointSourceID.colourMap.Deinit();
 }

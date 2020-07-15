@@ -261,7 +261,7 @@ struct PS_INPUT
 
 struct PS_OUTPUT
 {
-  float4 Color0 : SV_Target;
+  float4 Color0 : SV_Target0;
 };
 
 sampler sceneColourSampler;
@@ -275,33 +275,19 @@ PS_OUTPUT main(PS_INPUT input)
   PS_OUTPUT output;
   float4 colour = float4(0.0, 0.0, 0.0, 0.0);
   float depth = sceneDepthTexture.Sample(sceneDepthSampler, input.uv).x;
+  
+  FxaaTex samplerInfo;
+  samplerInfo.smpl = sceneColourSampler;
+  samplerInfo.tex = sceneColourTexture;
 
-  // only run FXAA on edges (simple edge detection)
-  float depth0 = sceneDepthTexture.Sample(sceneDepthSampler, input.edgeSampleUV0).x;
-  float depth1 = sceneDepthTexture.Sample(sceneDepthSampler, input.edgeSampleUV1).x;
-  float depth2 = sceneDepthTexture.Sample(sceneDepthSampler, input.edgeSampleUV2).x;
-  float depth3 = sceneDepthTexture.Sample(sceneDepthSampler, input.edgeSampleUV3).x;
-
-  const float edgeThreshold = 0.003;
-  float isEdge = 1.0 - (step(abs(depth0 - depth), edgeThreshold) * step(abs(depth1 - depth), edgeThreshold) * step(abs(depth2 - depth), edgeThreshold) * step(abs(depth3 - depth), edgeThreshold));
-  if (isEdge == 0.0)
-  {
-    colour = sceneColourTexture.Sample(sceneColourSampler, input.uv);
-  }
-  else
-  {
-    FxaaTex samplerInfo;
-    samplerInfo.smpl = sceneColourSampler;
-    samplerInfo.tex = sceneColourTexture;
-
-    colour = FxaaPixelShader(input.uv, float4(0, 0, 0, 0), samplerInfo, samplerInfo, samplerInfo, input.sampleStepSize,
-                                   float4(0, 0, 0, 0), float4(0, 0, 0, 0), float4(0, 0, 0, 0),
-                                   0.75,  //fxaaQualitySubpix
-                                   0.125, // fxaaQualityEdgeThreshold
-                                   0.0, // fxaaQualityEdgeThresholdMin
-                                   0, 0, float4(0, 0, 0, 0));
-  }
+  colour = FxaaPixelShader(input.uv, float4(0, 0, 0, 0), samplerInfo, samplerInfo, samplerInfo, input.sampleStepSize,
+                                 float4(0, 0, 0, 0), float4(0, 0, 0, 0), float4(0, 0, 0, 0),
+                                 0.75,  //fxaaQualitySubpix
+                                 0.125, // fxaaQualityEdgeThreshold
+                                 0.0, // fxaaQualityEdgeThresholdMin
+                                 0, 0, float4(0, 0, 0, 0));
 
   output.Color0 = float4(saturation(colour.xyz, input.saturation), 1.0);
+   
   return output;
 }
