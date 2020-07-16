@@ -1571,7 +1571,7 @@ void vcBPA_RunGridPopulation(void *pDataPtr, const vcBPAData &data, vdkAttribute
   {
     vdkPointBufferF64_Destroy(&pBuffer);
 
-    while (pData->pConvertItemData->chunkedArray.length > 20)
+    while (pData->pConvertItemData->chunkedArray.length > 2)
     {
       udSleep(100);
     }
@@ -1643,6 +1643,10 @@ void vcBPA_RunGridPopulation(void *pDataPtr, const vcBPAData &data, vdkAttribute
     << ", time costs: " << _time / 1000 << "(s) " << _time / 60000 << "(min)\n";
   outputFile.flush();
 
+  while (pData->pConvertItemData->chunkedArray.length > 2)
+  {
+    udSleep(100);
+  }
   vcBPAConvertItemData item = {};
   item.pManifold = pData->pManifold;
   item.pNewModelGrid = pNewModelGrid;
