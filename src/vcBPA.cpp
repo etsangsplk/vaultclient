@@ -13,7 +13,7 @@
 #include "udJSON.h"
 #include "udPlatformUtil.h"
 #include "udStringUtil.h"
-#include <fstream>
+#include "udDebug.h"
 
 #if VC_HASCONVERT
 
@@ -908,9 +908,9 @@ vcBPATriangle *vcBPA_CreateTriangle(vcBPAGridHashNode *pGrid, uint32_t vx, uint3
 
   ++pGrid->triangleSize;
 
-#ifdef _DEBUG
+#ifdef UD_DEBUG
   if (pGrid->triangleSize % 10000 == 0)
-    printf("triangleSize %d\n", pGrid->triangleSize);
+    udDebugPrintf("triangleSize %d\n", pGrid->triangleSize);
 #endif // _DEBUG
   
   return t;
@@ -922,7 +922,6 @@ bool vcBPA_FindSeedTriangle(vcBPAGridHashNode *pGrid, vcBPAVertex *pVertex, uint
   double ballRadiusSq = ballRadius * ballRadius;
   vcBPAVertex **nearbyPoints = nullptr;
   size_t nearbyNum = vcBPA_GetNearbyPoints(nearbyPoints, pGrid, pVertex, vx, vy, vz, ballRadiusSq*4);
-  //printf("grid(%d,%d,%d) voxel(%d,%d,%d) nearby %d\n", gridX, gridY, gridZ, vx, vy, vz, nearbyNum);
   if(nearbyNum == 0)
     return false;
 
@@ -999,8 +998,6 @@ bool vcBPA_FindSeedTriangle(vcBPAGridHashNode *pGrid, vcBPAVertex *pVertex, uint
         vTrianglez = udMin(vTrianglez, BPA_LEVEL_LEN);
         
         vcBPA_CreateTriangle(pGrid, (uint32_t)vTrianglex, (uint32_t)vTriangley, (uint32_t)vTrianglez, ballCenter, *n0, *n1, p2->position);
-        //printf("vcBPA_FindSeedTriangle %d voxel(%d,%d,%d)\n", pGrid->triangleSize, vx, vy, vz);
-
         udFree(nearbyPoints);
         return true;
       }
@@ -1250,7 +1247,7 @@ struct vcBPAConvertItem
 
 void vcBPA_DoGrid(vcBPAGridHashNode *pGrid, double ballRadius, double voxelSize, uint32_t gridX, uint32_t gridY, uint32_t gridZ, uint32_t gridXSize, uint32_t gridYSize, uint32_t gridZSize)
 {
-  printf("vcBPA_DoGrid grid(%d,%d,%d) gridSize(%d,%d,%d)\n", gridX, gridY, gridZ, gridXSize, gridYSize, gridZSize);
+  udDebugPrintf("vcBPA_DoGrid grid(%d,%d,%d) gridSize(%d,%d,%d)\n", gridX, gridY, gridZ, gridXSize, gridYSize, gridZSize);
 
   vcBPAHashMap<HASHKEY, vcBPAVoxel>::HashNodeBlock *pCurrBlock = nullptr;
   uint32_t currBlockIndex = 0;
@@ -1344,7 +1341,7 @@ void vcBPA_DoGrid(vcBPAGridHashNode *pGrid, double ballRadius, double voxelSize,
 
           if(pCurrBlock == nullptr && currHashIndex == HASH_ARRAY_LEN)
           {
-            printf("vcBPA_DoGrid seek ends.\n");
+            udDebugPrintf("vcBPA_DoGrid seek ends.\n");
             return;
           }
 
@@ -1378,31 +1375,22 @@ void vcBPA_DoGrid(vcBPAGridHashNode *pGrid, double ballRadius, double voxelSize,
 
         if (unuseNum == 0)
         {
-          //printf(" no unuse points, to search a new position \n");
           udFree(pUnuseArray);
           unUseIndex = 0;
           pNode = nullptr;
           continue;
         }
 
-        hashKey = pNode->hashKey;        
-        //printf("points get time %f count %d of total %d\n", udGetEpochMilliSecsUTCf() - nt, number, pGrid->pBuffer->pointCount);
+        hashKey = pNode->hashKey;
       }
-
-      double tt = udGetEpochMilliSecsUTCf();
       // points might used after vcBPA_FindSeedTriangle, so they need to be checked again.
       while (unUseIndex < unuseNum)
       {
         if (!pUnuseArray[unUseIndex]->used)
         {
-          //printf("points %d of %d, position(%d,%d,%d)\n", unUseIndex, unuseNum, GET_X(hashKey), GET_Y(hashKey), GET_Z(hashKey));
           bool bRet = vcBPA_FindSeedTriangle(pGrid, pUnuseArray[unUseIndex++], GET_X(hashKey), GET_Y(hashKey), GET_Z(hashKey), gridX, gridY, gridZ, ballRadius, voxelSize, gridXSize, gridYSize, gridZSize);
           if (bRet)
-          {
-            tt = udGetEpochMilliSecsUTCf() - tt;
-            //printf("vcBPA_FindSeedTriangle succ at %d/%d taks: %f(ms) %f(s)\n", unUseIndex - 1, unuseNum, tt, tt / 1000);
             break;
-          }
         }
         else
         {
@@ -1412,7 +1400,6 @@ void vcBPA_DoGrid(vcBPAGridHashNode *pGrid, double ballRadius, double voxelSize,
 
       if (unUseIndex == unuseNum)
       {
-        //printf("all points were checked, to search a new voxel \n");
         udFree(pUnuseArray);
         unuseNum = 0;
         unUseIndex = 0;
@@ -1508,7 +1495,7 @@ void vcBPA_UnfrozenEdges(vcBPAGridHashNode *pDestGrid, vcBPAGridHashNode *pSourc
 
 void vcBPA_RunGridPopulation(void *pDataPtr, const vcBPAData &data, vdkAttributeSet *pAttributes)
 {
-  printf("vcBPA_RunGridPopulation.\n");
+  udDebugPrintf("vcBPA_RunGridPopulation.\n");
   vcBPAConvertItem *pData = (vcBPAConvertItem *)pDataPtr;
   udDouble3 halfSize = data.gridSize * 0.5;
   udDouble3 center = data.zero + halfSize;
@@ -1524,20 +1511,20 @@ void vcBPA_RunGridPopulation(void *pDataPtr, const vcBPAData &data, vdkAttribute
 
   vdkPointBufferF64_Create(&pNewModelGrid->pBuffer, MAX_POINTNUM, pAttributes);
   vcBPA_QueryPoints(pData->pManifold->pContext, pData->pNewModel, &center.x, &halfSize.x, pNewModelGrid->pBuffer);
-  printf("vcBPA_QueryPoints pNewModel return %d.\n", pNewModelGrid->pBuffer->pointCount);
+  udDebugPrintf("vcBPA_QueryPoints pNewModel return %d.\n", pNewModelGrid->pBuffer->pointCount);
 
   double _time = udGetEpochMilliSecsUTCf();
   for (uint32_t j = 0; j < pNewModelGrid->pBuffer->pointCount; ++j)
     vcBPA_AddPoints(j, pNewModelGrid->pBuffer->pPositions[j * 3 + 0], pNewModelGrid->pBuffer->pPositions[j * 3 + 1], pNewModelGrid->pBuffer->pPositions[j * 3 + 2], pNewModelGrid->zero, &pNewModelGrid->voxelHashMap, pData->pManifold->voxelSize);
   pNewModelGrid->pointNum = pNewModelGrid->pBuffer->pointCount;
   _time = udGetEpochMilliSecsUTCf() - _time;
-  printf("vcBPA_AddPoints from new model: num: %d, time costs: %f(ms) %f(s) %f(m)\n", pNewModelGrid->pBuffer->pointCount, _time, _time/1000, _time/60000);
+  udDebugPrintf("vcBPA_AddPoints from new model: num: %d, time costs: %f(ms) %f(s) %f(m)\n", pNewModelGrid->pBuffer->pointCount, _time, _time/1000, _time/60000);
 
   // get points in the grid of old model, if empty, skip
   vdkPointBufferF64 *pBuffer;
   vdkPointBufferF64_Create(&pBuffer, MAX_POINTNUM, nullptr);
   vcBPA_QueryPoints(pData->pManifold->pContext, pData->pOldModel, &center.x, &halfSize.x, pBuffer);
-  printf("vcBPA_QueryPoints pOldModel return %d.\n", pBuffer->pointCount);
+  udDebugPrintf("vcBPA_QueryPoints pOldModel return %d.\n", pBuffer->pointCount);
   if (pBuffer->pointCount == 0)
   {
     vdkPointBufferF64_Destroy(&pBuffer);
@@ -1576,9 +1563,8 @@ void vcBPA_RunGridPopulation(void *pDataPtr, const vcBPAData &data, vdkAttribute
   for (uint32_t j = 0; j < pOldModelGrid->pBuffer->pointCount; ++j)
     vcBPA_AddPoints(j, pOldModelGrid->pBuffer->pPositions[j * 3 + 0], pOldModelGrid->pBuffer->pPositions[j * 3 + 1], pOldModelGrid->pBuffer->pPositions[j * 3 + 2], pOldModelGrid->zero, &pOldModelGrid->voxelHashMap, pData->pManifold->voxelSize);
   pOldModelGrid->pointNum = pOldModelGrid->pBuffer->pointCount;
-
   _time = udGetEpochMilliSecsUTCf() - _time;
-  printf("vcBPA_AddPoints from old model: num: %d, time costs: %f ms %f s %f min\n", pOldModelGrid->pBuffer->pointCount, _time, _time / 1000, _time / 60000);
+  udDebugPrintf("vcBPA_AddPoints from old model: num: %d, time costs: %f ms %f s %f min\n", pOldModelGrid->pBuffer->pointCount, _time, _time / 1000, _time / 60000);
 
   if (data.gridx > 0)
   {
@@ -1605,7 +1591,7 @@ void vcBPA_RunGridPopulation(void *pDataPtr, const vcBPAData &data, vdkAttribute
   vcBPA_DoGrid(pOldModelGrid, pData->pManifold->ballRadius, pData->pManifold->voxelSize, data.gridx, data.gridy, data.gridz, data.gridXSize, data.gridYSize, data.gridZSize);
   pOldModelGrid->CleanBPAData();
   _time = udGetEpochMilliSecsUTCf() - _time;
-  printf("vcBPA_DoGrid done. triangleSize:%d time costs: %f(s) %f(min). \n", pOldModelGrid->triangleSize, _time / 1000, _time / 60000);
+  udDebugPrintf("vcBPA_DoGrid done. triangleSize:%d time costs: %f(s) %f(min). \n", pOldModelGrid->triangleSize, _time / 1000, _time / 60000);
 
   //TODO: memory problem
   //while (pData->pConvertItemData->chunkedArray.length > 2)
@@ -1625,7 +1611,7 @@ void vcBPA_RunGridPopulation(void *pDataPtr, const vcBPAData &data, vdkAttribute
 
 uint32_t vcBPA_ProcessThread(void *pDataPtr)
 {
-  printf("vcBPA_ProcessThread \n");
+  udDebugPrintf("vcBPA_ProcessThread \n");
   vcBPAConvertItem *pData = (vcBPAConvertItem *)pDataPtr;
 
   // data from new model
@@ -1641,7 +1627,7 @@ uint32_t vcBPA_ProcessThread(void *pDataPtr)
   //try to slice
   if (!vcBPA_CanSlice(pData->pManifold, newModelExtents))
   {
-    printf("slice failed, release pManifold \n");
+    udDebugPrintf("slice failed, release pManifold \n");
     pData->pManifold->Deinit();
     udFree(pData->pManifold);
 
@@ -1656,7 +1642,7 @@ uint32_t vcBPA_ProcessThread(void *pDataPtr)
   uint32_t gridYSize = (uint32_t)((newModelExtents.y + pData->pManifold->baseGridSize - UD_EPSILON) / pData->pManifold->baseGridSize);
   uint32_t gridZSize = (uint32_t)((newModelExtents.z + pData->pManifold->baseGridSize - UD_EPSILON) / pData->pManifold->baseGridSize);
 
-  printf("slice success: radius:%f grid size:%f grid num:(%d, %d, %d) \n", pData->ballRadius, pData->pManifold->baseGridSize, gridXSize, gridYSize, gridZSize);
+  udDebugPrintf("slice success: radius:%f grid size:%f grid num:(%d, %d, %d) \n", pData->ballRadius, pData->pManifold->baseGridSize, gridXSize, gridYSize, gridZSize);
 
   static const int NUM = 1;
   vdkPointBufferF64 *pBuffer = nullptr;
@@ -1745,6 +1731,7 @@ vdkError vcBPA_ConvertOpen(vdkConvertCustomItem *pConvertInput, uint32_t everyNt
 
   vcBPAConvertItem *pData = (vcBPAConvertItem*)pConvertInput->pData;
   udSafeDeque_Create(&pData->pConvertItemData, 128);
+  pData->running.Set(vcBPARS_Active);
 
   pData->pManifold = udAllocType(vcBPAManifold, 1, udAF_Zero);
   pData->pManifold->Init();
@@ -1805,7 +1792,7 @@ void vcBPA_WaitNextGrid(vcBPAConvertItem *pData)
 
   } while (true);
 
-  printf("vcBPA_WaitNextGrid end\n");
+  udDebugPrintf("vcBPA_WaitNextGrid end\n");
 }
 
 vcBPAHashMap<HASHKEY, vcBPAVoxel>::HashNode *FindNextNode(vcBPAConvertItem *pData)
@@ -1960,7 +1947,7 @@ void vcBPA_ReadGrid(vcBPAConvertItem *pData, vdkPointBufferF64 *pBuffer, uint32_
       if (pNode == nullptr)
       {
         assert(pData->hashIndex == HASH_ARRAY_LEN);
-        printf("read end. \n");
+        udDebugPrintf("read end. \n");
         return;
       } 
       assert(pData->hashKey >= 0);
@@ -2080,7 +2067,7 @@ vdkError vcBPA_ConvertReadPoints(vdkConvertCustomItem *pConvertInput, vdkPointBu
 
       if (pData->hashIndex == HASH_ARRAY_LEN)
       {
-        printf("read new grid error. \n");
+        udDebugPrintf("read new grid error. \n");
         pData->CleanReadData();
         pData->running.Set(vcBPARS_Failed);
         return vE_Failure;
