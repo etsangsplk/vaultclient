@@ -255,16 +255,12 @@ struct vcBPAHashMap
     {
       pNode = (*pFirst)->AddHashNode(hashKey);
     }
-
     return &pNode->data;
   }
 
   void Deinit()
   {
-    printf("%s Deinit()\n", typeid(vcBPAHashMap).name());
-
     if (!pArray) return;
-
     for (uint32_t i = 0; i < HASH_ARRAY_LEN; i++)
     {
       if (pArray[i])
@@ -294,7 +290,6 @@ struct vcBPAHashMap
 
 };
 
-
 template<typename TEdgeArray, typename TEdge>
 TEdge *FindAvailableStackArray(TEdgeArray &pBottomArray)
 {
@@ -308,7 +303,6 @@ TEdge *FindAvailableStackArray(TEdgeArray &pBottomArray)
     pFind->pTop->pBottom = pFind;
     pFind = pFind->pTop;
   }
-
   return &pFind->edges[pFind->index++];
 }
 
@@ -456,8 +450,6 @@ struct vcBPAGridHashNode
 
   void CleanBPAData()
   {
-    printf("vcBPAGridHashNode CleanBPAData()\n");
-
     // release all active edges(should be anyone left)
     RemoveAllEdge<vcBPAEdgeArray>(activeEdgesStack);  
 
@@ -467,8 +459,6 @@ struct vcBPAGridHashNode
 
   void CleanCompareData()
   {
-    printf("vcBPAGridHashNode CleanCompareData()\n");
-
     // release all triangles
     triangleHashMap.Deinit();
 
@@ -482,7 +472,6 @@ struct vcBPAGridHashNode
 
   void Deinit()
   {
-    printf("vcBPAGridHashNode Deinit()\n");
     // release all left frozen edges
     RemoveAllEdge<vcBPAFrozenEdgeArray>(frozenEdgesStack);
     CleanBPAData();
@@ -620,7 +609,6 @@ struct vcBPAGridHashNode
    template<typename T_ARRAY>
   static void RemoveAllEdge(T_ARRAY &pArray)
   {
-    printf("%s RemoveAllEdge()\n", typeid(T_ARRAY).name());
     if (pArray.index == 0)
       return;
 
@@ -683,8 +671,6 @@ struct vcVoxelGridHashNode
   }
   void CleanCompareData()
   {
-    printf("vcVoxelGridHashNode CleanCompareData()\n");
-
     voxelHashMap.Deinit();
 
     if (pBuffer)
@@ -696,8 +682,6 @@ struct vcVoxelGridHashNode
   }
   void Deinit()
   {
-    printf("vcVoxelGridHashNode Deinit()\n");
-
     CleanCompareData();
   }
 };
@@ -722,8 +706,6 @@ struct vcBPAManifold
 
   void Deinit()
   {
-    printf("vcBPAManifold Deinit()\n");
-
     oldModelMap.Deinit();
     newModelMap.Deinit();
 
@@ -914,10 +896,6 @@ bool vcBPA_InsertEdge(vcBPAGridHashNode *pGrid, const udDouble3 &ballCenter, con
 
 vcBPATriangle *vcBPA_CreateTriangle(vcBPAGridHashNode *pGrid, uint32_t vx, uint32_t vy, uint32_t vz, const udDouble3 &ballCenter, const udDouble3 &p0, const udDouble3 &p1, const udDouble3 &p2)
 {
-#ifdef _DEBUG
-  double _time = udGetEpochMilliSecsUTCf();
-#endif // _DEBUG
-
   vcBPATriangleArray *pArray = pGrid->triangleHashMap.FindData(vx, vy, vz);
   if (pArray == nullptr)
     pArray = pGrid->triangleHashMap.AddNode(vx, vy, vz);
@@ -931,9 +909,8 @@ vcBPATriangle *vcBPA_CreateTriangle(vcBPAGridHashNode *pGrid, uint32_t vx, uint3
   ++pGrid->triangleSize;
 
 #ifdef _DEBUG
-  _time = udGetEpochMilliSecsUTCf() - _time;
-  if (pGrid->triangleSize % 1000 == 0)
-    printf("triangleSize %d %f\n", pGrid->triangleSize, _time);
+  if (pGrid->triangleSize % 10000 == 0)
+    printf("triangleSize %d\n", pGrid->triangleSize);
 #endif // _DEBUG
   
   return t;
@@ -1529,10 +1506,9 @@ void vcBPA_UnfrozenEdges(vcBPAGridHashNode *pDestGrid, vcBPAGridHashNode *pSourc
 
 }
 
-void vcBPA_RunGridPopulation(void *pDataPtr, const vcBPAData &data, vdkAttributeSet *pAttributes, std::ofstream &outputFile)
+void vcBPA_RunGridPopulation(void *pDataPtr, const vcBPAData &data, vdkAttributeSet *pAttributes)
 {
   printf("vcBPA_RunGridPopulation.\n");
-
   vcBPAConvertItem *pData = (vcBPAConvertItem *)pDataPtr;
   udDouble3 halfSize = data.gridSize * 0.5;
   udDouble3 center = data.zero + halfSize;
@@ -1551,16 +1527,11 @@ void vcBPA_RunGridPopulation(void *pDataPtr, const vcBPAData &data, vdkAttribute
   printf("vcBPA_QueryPoints pNewModel return %d.\n", pNewModelGrid->pBuffer->pointCount);
 
   double _time = udGetEpochMilliSecsUTCf();
-
   for (uint32_t j = 0; j < pNewModelGrid->pBuffer->pointCount; ++j)
     vcBPA_AddPoints(j, pNewModelGrid->pBuffer->pPositions[j * 3 + 0], pNewModelGrid->pBuffer->pPositions[j * 3 + 1], pNewModelGrid->pBuffer->pPositions[j * 3 + 2], pNewModelGrid->zero, &pNewModelGrid->voxelHashMap, pData->pManifold->voxelSize);
   pNewModelGrid->pointNum = pNewModelGrid->pBuffer->pointCount;
-
   _time = udGetEpochMilliSecsUTCf() - _time;
   printf("vcBPA_AddPoints from new model: num: %d, time costs: %f(ms) %f(s) %f(m)\n", pNewModelGrid->pBuffer->pointCount, _time, _time/1000, _time/60000);
-  outputFile << "vcBPA_AddPoints from new model: num: " << pNewModelGrid->pBuffer->pointCount
-    << ", time costs: " << _time << "(ms) " << _time / 1000 << "(s) " << _time / 60000 << "(min)\n";
-  outputFile.flush();
 
   // get points in the grid of old model, if empty, skip
   vdkPointBufferF64 *pBuffer;
@@ -1571,10 +1542,9 @@ void vcBPA_RunGridPopulation(void *pDataPtr, const vcBPAData &data, vdkAttribute
   {
     vdkPointBufferF64_Destroy(&pBuffer);
 
-    while (pData->pConvertItemData->chunkedArray.length > 2)
-    {
-      udSleep(100);
-    }
+    //TODO: memory problem
+    //while (pData->pConvertItemData->chunkedArray.length > 2)
+    //  udSleep(100);
 
     vcBPAConvertItemData item = {};
     item.pManifold = pData->pManifold;
@@ -1586,7 +1556,6 @@ void vcBPA_RunGridPopulation(void *pDataPtr, const vcBPAData &data, vdkAttribute
     item.leftPoint = pNewModelGrid->pointNum;
     item.pOldModel = pData->pOldModel;
     udSafeDeque_PushBack(pData->pConvertItemData, item);
-
     return;
   }
 
@@ -1610,9 +1579,7 @@ void vcBPA_RunGridPopulation(void *pDataPtr, const vcBPAData &data, vdkAttribute
 
   _time = udGetEpochMilliSecsUTCf() - _time;
   printf("vcBPA_AddPoints from old model: num: %d, time costs: %f ms %f s %f min\n", pOldModelGrid->pBuffer->pointCount, _time, _time / 1000, _time / 60000);
-  outputFile << "vcBPA_AddPoints from old model: num: " << pNewModelGrid->pBuffer->pointCount
-    << ", time costs: " << _time << "(ms) " << _time / 1000 << "(s) " << _time / 60000 << "(min)\n";
-  outputFile.flush();
+
   if (data.gridx > 0)
   {
     vcBPAGridHashNode *lastX = pData->pManifold->oldModelMap.FindData(data.gridx - 1, data.gridy, data.gridz);
@@ -1639,14 +1606,11 @@ void vcBPA_RunGridPopulation(void *pDataPtr, const vcBPAData &data, vdkAttribute
   pOldModelGrid->CleanBPAData();
   _time = udGetEpochMilliSecsUTCf() - _time;
   printf("vcBPA_DoGrid done. triangleSize:%d time costs: %f(s) %f(min). \n", pOldModelGrid->triangleSize, _time / 1000, _time / 60000);
-  outputFile << "vcBPA_DoGrid done. triangleSize: " << pOldModelGrid->triangleSize
-    << ", time costs: " << _time / 1000 << "(s) " << _time / 60000 << "(min)\n";
-  outputFile.flush();
 
-  while (pData->pConvertItemData->chunkedArray.length > 2)
-  {
-    udSleep(100);
-  }
+  //TODO: memory problem
+  //while (pData->pConvertItemData->chunkedArray.length > 2)
+  //  udSleep(100);
+
   vcBPAConvertItemData item = {};
   item.pManifold = pData->pManifold;
   item.pNewModelGrid = pNewModelGrid;
@@ -1657,7 +1621,6 @@ void vcBPA_RunGridPopulation(void *pDataPtr, const vcBPAData &data, vdkAttribute
   item.leftPoint = pNewModelGrid->pointNum;
   item.pOldModel = pData->pOldModel;
   udSafeDeque_PushBack(pData->pConvertItemData, item);
-
 }
 
 uint32_t vcBPA_ProcessThread(void *pDataPtr)
@@ -1675,14 +1638,10 @@ uint32_t vcBPA_ProcessThread(void *pDataPtr)
   udDouble3 newModelZero = (storedMatrix * udDouble4::create(localZero, 1.0)).toVector3();
   udDouble3 newModelCenter = (storedMatrix * udDouble4::create(header.boundingBoxCenter[0], header.boundingBoxCenter[1], header.boundingBoxCenter[2], 1.0)).toVector3();
 
-  std::ofstream outputFile("output.txt", std::ofstream::out);
-
   //try to slice
   if (!vcBPA_CanSlice(pData->pManifold, newModelExtents))
   {
     printf("slice failed, release pManifold \n");
-    outputFile << "slice failed, release pManifold \n";
-
     pData->pManifold->Deinit();
     udFree(pData->pManifold);
 
@@ -1698,7 +1657,6 @@ uint32_t vcBPA_ProcessThread(void *pDataPtr)
   uint32_t gridZSize = (uint32_t)((newModelExtents.z + pData->pManifold->baseGridSize - UD_EPSILON) / pData->pManifold->baseGridSize);
 
   printf("slice success: radius:%f grid size:%f grid num:(%d, %d, %d) \n", pData->ballRadius, pData->pManifold->baseGridSize, gridXSize, gridYSize, gridZSize);
-  outputFile << "slice success: radius:"<< pData->ballRadius << "grid size:" << pData->pManifold->baseGridSize << "grid num:("<< gridXSize << "," << gridYSize << "," << gridZSize <<") \n";
 
   static const int NUM = 1;
   vdkPointBufferF64 *pBuffer = nullptr;
@@ -1727,13 +1685,6 @@ uint32_t vcBPA_ProcessThread(void *pDataPtr)
         // real grid z size
         gridSize.z = udMin(pData->pManifold->baseGridSize, newModelExtents.z);
 
-        printf("running: %s check grid(%d, %d, %d) size(%f, %f, %f)\n",
-          (pData->running.Get() == vcBPARS_Active) ? "true" : "false"
-          , gridx, gridy, gridz, gridSize.x, gridSize.y, gridSize.z);
-        outputFile << "running:" << ((pData->running.Get() == vcBPARS_Active) ? "true" : "false")
-          << "check grid:(" << gridx << "," << gridy << "," << gridz << ")"
-          << " size:(" << gridXSize << "," << gridYSize << "," << gridZSize << ") \n";
-
         udDouble3 halfSize = gridSize * 0.5;
         udDouble3 center = zero + halfSize;
 
@@ -1741,7 +1692,6 @@ uint32_t vcBPA_ProcessThread(void *pDataPtr)
         vcBPA_QueryPoints(pData->pManifold->pContext, pData->pNewModel, &center.x, &halfSize.x, pBuffer);        
         if (0 == pBuffer->pointCount)
           continue;
-       
 
         // run grid BPA
         vcBPAData data;
@@ -1753,19 +1703,14 @@ uint32_t vcBPA_ProcessThread(void *pDataPtr)
         data.gridXSize = gridXSize;
         data.gridYSize = gridYSize;
         data.gridZSize = gridZSize;
-        vcBPA_RunGridPopulation(pDataPtr, data, &header.attributes, outputFile);
+        vcBPA_RunGridPopulation(pDataPtr, data, &header.attributes);
       }
-    }      
+    }
   }
 
 quit:
   totalTime = udGetEpochMilliSecsUTCf() - totalTime;
-  outputFile << "vcBPA_ProcessThread done. Total time costs: " << totalTime / 1000 << "(s) " << totalTime / 60000 << "(min)\n";
-  outputFile.flush();
-
   vdkPointBufferF64_Destroy(&pBuffer);
-  outputFile.flush();
-  outputFile.close();
 
   // done
   if (pData->running.Get() == vcBPARS_Active && gridx == gridXSize && gridy == gridYSize && gridz == gridZSize)
@@ -1793,8 +1738,6 @@ quit:
 
 vdkError vcBPA_ConvertOpen(vdkConvertCustomItem *pConvertInput, uint32_t everyNth, const double origin[3], double pointResolution, vdkConvertCustomItemFlags flags)
 {
-  printf("vcBPA_ConvertOpen \n");
-
   udUnused(everyNth);
   udUnused(origin);
   udUnused(pointResolution);
@@ -1851,8 +1794,6 @@ void vcBPA_FindNearByTriangle(udChunkedArray<vcBPATriangle> &triangles, vcBPAGri
 
 void vcBPA_WaitNextGrid(vcBPAConvertItem *pData)
 {
-  printf("vcBPA_WaitNextGrid start \n");
-
   do
   {
     if (pData->running.Get() > vcBPARS_BPADone) return;
@@ -1915,7 +1856,6 @@ vcBPAHashMap<HASHKEY, vcBPAVoxel>::HashNode *FindNextNode(vcBPAConvertItem *pDat
     vcBPAHashMap<HASHKEY, vcBPAVoxel>::HashNode *pNode = pBlock->pBlockData[0];
     pData->hashKey = pNode->hashKey;
     return pNode;
-
   }
 
   return NULL;
@@ -2009,7 +1949,6 @@ void vcBPA_ReadVertextData(vcBPAVertex *pPoint, udChunkedArray<vcBPATriangle> &t
 
 void vcBPA_ReadGrid(vcBPAConvertItem *pData, vdkPointBufferF64 *pBuffer, uint32_t displacementOffset, udUInt3 displacementDistanceOffset)
 {
-  static int tcount = 0;
   vcVoxelGridHashNode *pNewModelGrid = pData->activeItem.pNewModelGrid;
   vcBPAGridHashNode *pOldModelGrid = pData->activeItem.pOldModelGrid;  
 
@@ -2032,11 +1971,8 @@ void vcBPA_ReadGrid(vcBPAConvertItem *pData, vdkPointBufferF64 *pBuffer, uint32_
       pData->arrayLength = voxel.pointNum;
     }
 
-    if (pData->ppVertex == nullptr)
-    {      
-      printf("memory run out. \n");
+    if (pData->ppVertex == nullptr) //memory run out
       return;
-    }
 
     uint32_t vx = GET_X(pData->hashKey);
     uint32_t vy = GET_Y(pData->hashKey);
@@ -2053,21 +1989,16 @@ void vcBPA_ReadGrid(vcBPAConvertItem *pData, vdkPointBufferF64 *pBuffer, uint32_
         break;
     }
 
-    //printf("vcBPA_ReadGrid arrayLength:%d nearby triangles: %d. \n", pData->arrayLength, (int)triangles.length);
     while (pData->pointIndex < pData->arrayLength)
     {
       vcBPAVertex *pPoint = pData->ppVertex[pData->pointIndex++];
       vcBPA_ReadVertextData(pPoint, triangles, pBuffer, pNewModelGrid, displacementOffset, displacementDistanceOffset);
 
       ++pBuffer->pointCount;
-      ++tcount;
       --pData->activeItem.leftPoint;
 
       if (pBuffer->pointCount == pBuffer->pointsAllocated)
-      {
-        printf("vcBPA_ReadGrid finish reading %d. total write count: %d\n", pBuffer->pointsAllocated, tcount);
         break;
-      }
 
       if (pData->activeItem.leftPoint == 0) // stop search
         return;
@@ -2076,7 +2007,6 @@ void vcBPA_ReadGrid(vcBPAConvertItem *pData, vdkPointBufferF64 *pBuffer, uint32_
     triangles.Deinit();
     if (pData->pointIndex == pData->arrayLength)
     {
-      //printf("vcBPA_ReadGrid finish arrayLength %d. total write count: %d\n", pData->arrayLength, tcount);
       udFree(pData->ppVertex);
       pData->pointIndex = 0;
       pData->arrayLength = 0;
@@ -2085,21 +2015,12 @@ void vcBPA_ReadGrid(vcBPAConvertItem *pData, vdkPointBufferF64 *pBuffer, uint32_
 
 }
 
-static std::ofstream fw("write.txt", std::ofstream::out);
 vdkError vcBPA_ConvertReadPoints(vdkConvertCustomItem *pConvertInput, vdkPointBufferF64 *pBuffer)
 {
-  printf("vcBPA_ConvertReadPoints called, pBuffer->pointsAllocated %d\n", pBuffer->pointsAllocated);
-  
   vcBPAConvertItem *pData = (vcBPAConvertItem *)pConvertInput->pData;
   pBuffer->pointCount = 0;
   if (pData->running.Get() == vcBPARS_Success)
-  {
-    fw << "done." << std::endl;
-    fw.flush();
-    fw.close();
-    return vE_Success;
-  }
-    
+    return vE_Success;  
 
   uint32_t displacementOffset = 0;
   udUInt3 displacementDistanceOffset = {};
@@ -2131,15 +2052,11 @@ vdkError vcBPA_ConvertReadPoints(vdkConvertCustomItem *pConvertInput, vdkPointBu
       // done
       if (pData->activeItem.pNewModelGrid == nullptr)
       {
-        fw << "to end." << std::endl;
-        printf("done. last write: %d\n", pBuffer->pointCount);
         pData->CleanReadData();
         pData->running.Set(vcBPARS_Success);
         return vE_Success;
       }
 
-      fw << "read grid." << std::endl;
-      printf("vcBPA_ConvertReadPoints new grid %d to read. \n", pData->activeItem.leftPoint);
       while (pData->hashIndex < HASH_ARRAY_LEN)
       {
         vcBPAHashMap<HASHKEY, vcBPAVoxel>::HashNodeBlock *pBlock = pData->activeItem.pNewModelGrid->voxelHashMap.pArray[pData->hashIndex];
@@ -2155,7 +2072,6 @@ vdkError vcBPA_ConvertReadPoints(vdkConvertCustomItem *pConvertInput, vdkPointBu
             voxel.ToArray(pData->ppVertex);
             pData->pointIndex = 0;
             pData->arrayLength = voxel.pointNum;
-            printf("vcBPA_ConvertReadPoints new voxel %d to read. \n", voxel.pointNum);
             break;
           }
         }
@@ -2169,7 +2085,6 @@ vdkError vcBPA_ConvertReadPoints(vdkConvertCustomItem *pConvertInput, vdkPointBu
         pData->running.Set(vcBPARS_Failed);
         return vE_Failure;
       }
-
     }
 
     vcBPA_ReadGrid(pData, pBuffer, displacementOffset, displacementDistanceOffset);
@@ -2183,19 +2098,15 @@ vdkError vcBPA_ConvertReadPoints(vdkConvertCustomItem *pConvertInput, vdkPointBu
 
 void vcBPA_ConvertClose(vdkConvertCustomItem *pConvertInput)
 {
-  printf("vcBPA_ConvertClose \n");
-
   vcBPAConvertItem *pData = (vcBPAConvertItem *)pConvertInput->pData;
   if (pData->running.Get() == vcBPARS_Active)
     pData->running.Set(vcBPARS_Close);
 
   pData->Deinit();
-
 }
 
 void vcBPA_ConvertDestroy(vdkConvertCustomItem *pConvertInput)
 {
-  printf("vcBPA_ConvertDestroy \n");
   vcBPAConvertItem *pBPA = (vcBPAConvertItem*)pConvertInput->pData;
   vdkPointCloud_Unload(&pBPA->pOldModel);
   vdkPointCloud_Unload(&pBPA->pNewModel);
@@ -2205,15 +2116,11 @@ void vcBPA_ConvertDestroy(vdkConvertCustomItem *pConvertInput)
 
 void vcBPA_CompareExport(vcState *pProgramState, const char *pOldModelPath, const char *pNewModelPath, double ballRadius, double gridSize, const char *pName)
 {
-  printf("vcBPA_CompareExport \n");
-
   vcConvertItem *pConvertItem = nullptr;
   vcConvert_AddEmptyJob(pProgramState, &pConvertItem);
-
   udLockMutex(pConvertItem->pMutex);
 
   vdkPointCloudHeader header = {};
-
   vcBPAConvertItem *pBPA = udAllocType(vcBPAConvertItem, 1, udAF_Zero);
   pBPA->pContext = pProgramState->pVDKContext;
   vdkPointCloud_Load(pBPA->pContext, &pBPA->pOldModel, pOldModelPath, nullptr);
