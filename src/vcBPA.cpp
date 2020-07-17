@@ -1622,7 +1622,6 @@ uint32_t vcBPA_ProcessThread(void *pDataPtr)
   udDouble3 unitSpaceExtents = udDouble3::create(header.boundingBoxExtents[0] * 2, header.boundingBoxExtents[1] * 2, header.boundingBoxExtents[2] * 2);
   udDouble3 newModelExtents = unitSpaceExtents * udDouble3::create(udMag3(storedMatrix.axis.x), udMag3(storedMatrix.axis.y), udMag3(storedMatrix.axis.z));
   udDouble3 newModelZero = (storedMatrix * udDouble4::create(localZero, 1.0)).toVector3();
-  udDouble3 newModelCenter = (storedMatrix * udDouble4::create(header.boundingBoxCenter[0], header.boundingBoxCenter[1], header.boundingBoxCenter[2], 1.0)).toVector3();
 
   //try to slice
   if (!vcBPA_CanSlice(pData->pManifold, newModelExtents))
@@ -2031,7 +2030,7 @@ vdkError vcBPA_ConvertReadPoints(vdkConvertCustomItem *pConvertInput, vdkPointBu
 
   while (true)
   {
-    if (pData->activeItem.pNewModelGrid == nullptr || pData->activeItem.pNewModelGrid != nullptr && pData->activeItem.leftPoint == 0)
+    if (pData->activeItem.pNewModelGrid == nullptr || (pData->activeItem.pNewModelGrid != nullptr && pData->activeItem.leftPoint == 0))
     {
       pData->CleanReadData();
       vcBPA_WaitNextGrid(pData);
