@@ -55,6 +55,7 @@ private:
   bool m_showLength;
   bool m_showAllLengths;
   bool m_showFill;
+  double m_meshArea;
 
   double m_totalLength;
   double m_area;
