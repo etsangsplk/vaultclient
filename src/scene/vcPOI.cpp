@@ -319,7 +319,7 @@ public:
     m_pParent->m_showAllLengths = false;
     m_pParent->m_showLength = false;
     m_pParent->m_showFill = true;
-    m_pParent->m_meshArea = 0.0f;
+    m_pParent->m_meshArea = 0.0;
   }
 
   ~vcPOIState_MeasureArea()
@@ -1344,19 +1344,14 @@ void vcPOI::GenerateLineFillPolygon(vcState *pProgramState)
     
     // Calculate area
     m_meshArea = 0.0;
-    for (int i = 0; i < trianglePointList.size(); i += 3)
+    for (size_t i = 0; i < trianglePointList.size(); i += 3)
     {
-      udFloat3 e1 = {
-        pVerts[i + 1].position.x - pVerts[i].position.x,
-        pVerts[i + 1].position.y - pVerts[i].position.y,
-        pVerts[i + 1].position.z - pVerts[i].position.z };
-      udFloat3 e2 = {
-        pVerts[i + 2].position.x - pVerts[i].position.x,
-        pVerts[i + 2].position.y - pVerts[i].position.y,
-        pVerts[i + 2].position.z - pVerts[i].position.z };
-      udFloat3 e3 = udCross3<float>(e1, e2);
+      udDouble3 triPoint1 = udDouble3::create(pVerts[i].position);
+      udDouble3 triPoint2 = udDouble3::create(pVerts[i + 1].position);
+      udDouble3 triPoint3 = udDouble3::create(pVerts[i + 2].position);
+      udDouble3 e3 = udCross3<double>(triPoint2 - triPoint1, triPoint3 - triPoint1);
 
-      m_meshArea += (double)(udMag3(e3) / 2.0f);
+      m_meshArea += udMag3(e3) / 2.0;
     }
 
     udFree(pModifiedVerts);
