@@ -1357,6 +1357,7 @@ void vcPOI::GenerateLineFillPolygon(vcState *pProgramState)
     }
 
     udFree(pModifiedVerts);
+    udFree(pPositions);
     udFree(pVerts);
   }
 }
