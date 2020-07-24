@@ -1304,19 +1304,16 @@ void vcPOI::GenerateLineFillPolygon(vcState *pProgramState)
        
     int numPoints = (int)trianglePointList.size();
 
-    vcP3N3UV2Vertex *pVerts = udAllocType(vcP3N3UV2Vertex, numPoints, udAF_Zero);
+    udDouble3 *pPositions = udAllocType(udDouble3, numPoints, udAF_Zero);
 
     for (int64_t i = 0; i < (int64_t)trianglePointList.size(); ++i)
-    {
-      udFloat3 pos = udFloat3::create((float)trianglePointList[i].x, (float)trianglePointList[i].y, 0);      
-      pVerts[i] = { pos, defaultNormal, defaultUV };
-    }
+      pPositions[i] = udDouble3::create(trianglePointList[i].x, trianglePointList[i].y, 0);
     
     // Un-flatten 2D Result
     for (int64_t i = 0; i < (int64_t)trianglePointList.size(); ++i)
     {
       double closestDist = FLT_MAX;
-      float closestZ = 0;
+      double closestZ = 0;
       for (int pointIndex = 0; pointIndex < m_line.numPoints; ++pointIndex)
       {
         udDouble2 pos = (pModifiedVerts[pointIndex] - pModifiedVerts[0]).toVector2();
@@ -1325,17 +1322,22 @@ void vcPOI::GenerateLineFillPolygon(vcState *pProgramState)
         if (dist < closestDist)
         {
           closestDist = dist;
-          closestZ = (float)(pModifiedVerts[pointIndex].z - pModifiedVerts[0].z);
+          closestZ = pModifiedVerts[pointIndex].z - pModifiedVerts[0].z;
         }
       }
     
-      pVerts[i].position.z = closestZ;
+      pPositions[i].z = closestZ;
     }
 
     // Un-Rotate
+    vcP3N3UV2Vertex *pVerts = udAllocType(vcP3N3UV2Vertex, numPoints, udAF_Zero);
     udFloatQuat rotatef = udFloatQuat::create(rotate);
     for (int64_t i = 0; i < (int64_t)trianglePointList.size(); ++i)
-      pVerts[i].position = rotatef.apply(pVerts[i].position);
+    {
+      pVerts[i].position = rotatef.apply(udFloat3::create(pPositions[i]));
+      pVerts[i].uv = defaultUV;
+      pVerts[i].normal = defaultNormal;
+    }
 
     vcPolygonModel_Destroy(&m_pPolyModel);
     vcPolygonModel_CreateFromRawVertexData(&m_pPolyModel, pVerts, numPoints, vcP3N3UV2VertexLayout, (int)(udLengthOf(vcP3N3UV2VertexLayout)));
