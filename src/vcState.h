@@ -241,6 +241,8 @@ struct vcState
     vcImageType imageType;
   } image, screenshot;
 
+  bool exportVideo;
+
   vcFileDialog fileDialog;
 
   vcTranslationInfo languageInfo;

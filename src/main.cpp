@@ -2465,6 +2465,26 @@ void vcMain_ShowSceneExplorerWindow(vcState *pProgramState)
       }
     }
 
+    if (ImGui::MenuItem(vcString::Get("sceneExplorerAddFlythrough"), nullptr, nullptr))
+    {
+      udProjectNode *pNode = nullptr;
+      if (udProjectNode_Create(pProgramState->activeProject.pProject, &pNode, pProgramState->activeProject.pRoot, "FlyPath", vcString::Get("flythroughDefaultName"), nullptr, nullptr) != udE_Success)
+      {
+        vcState::ErrorItem projectError;
+        projectError.source = vcES_ProjectChange;
+        projectError.pData = udStrdup(vcString::Get("sceneExplorerAddFlythrough"));
+        projectError.resultCode = udR_Failure_;
+
+        pProgramState->errorItems.PushBack(projectError);
+
+        vcModals_OpenModal(pProgramState, vcMT_ProjectChange);
+      }
+      else
+      {
+        udStrcpy(pProgramState->sceneExplorer.selectUUIDWhenPossible, pNode->UUID);
+      }
+    }
+
     ImGui::EndPopup();
   }
 
@@ -2551,7 +2571,7 @@ void vcMain_RenderSceneWindow(vcState *pProgramState)
 
   udDouble3 cameraMoveOffset = udDouble3::zero();
 
-  if (!pProgramState->settings.screenshot.taking && (pProgramState->sceneResolution.x != windowSize.x || pProgramState->sceneResolution.y != windowSize.y)) //Resize buffers
+  if (!pProgramState->settings.screenshot.taking && !pProgramState->exportVideo && (pProgramState->sceneResolution.x != windowSize.x || pProgramState->sceneResolution.y != windowSize.y)) //Resize buffers
   {
     pProgramState->sceneResolution = udUInt2::create((uint32_t)windowSize.x, (uint32_t)windowSize.y);
     vcRender_ResizeScene(pProgramState, pProgramState->pRenderContext, pProgramState->sceneResolution.x, pProgramState->sceneResolution.y);
@@ -2559,6 +2579,16 @@ void vcMain_RenderSceneWindow(vcState *pProgramState)
     // Set back to default buffer, vcRender_ResizeScene calls vcCreateFramebuffer which binds the 0th framebuffer
     // this isn't valid on iOS when using UIKit.
     vcFramebuffer_Bind(pProgramState->pDefaultFramebuffer);
+  }
+  else if (pProgramState->exportVideo && pProgramState->sceneResolution != udUInt2::create(3840, 2160))
+  {
+    pProgramState->sceneResolution = udUInt2::create(3840, 2160);
+
+    vcRender_ResizeScene(pProgramState, pProgramState->pRenderContext, pProgramState->sceneResolution.x, pProgramState->sceneResolution.y);
+    vcFramebuffer_Bind(pProgramState->pDefaultFramebuffer);
+
+    // Immediately update camera
+    vcCamera_UpdateMatrices(pProgramState->geozone, &pProgramState->camera, pProgramState->settings.camera, udFloat2::create(pProgramState->sceneResolution));
   }
   else if (pProgramState->settings.screenshot.taking && pProgramState->sceneResolution != pProgramState->settings.screenshot.resolution)
   {
@@ -2582,7 +2612,7 @@ void vcMain_RenderSceneWindow(vcState *pProgramState)
     // Actual rendering to this texture is deferred
     ImGui::Image(renderData.pSceneTexture, windowSize, ImVec2(0, 0), ImVec2(renderData.sceneScaling.x, renderData.sceneScaling.y));
 
-    if (pProgramState->settings.screenshot.taking)
+    if (pProgramState->settings.screenshot.taking || pProgramState->exportVideo)
       pProgramState->screenshot.pImage = renderData.pSceneTexture;
 
     static bool wasContextMenuOpenLastFrame = false;
