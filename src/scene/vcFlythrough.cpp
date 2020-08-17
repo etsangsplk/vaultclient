@@ -102,15 +102,15 @@ void vcFlythrough::AddToScene(vcState *pProgramState, vcRenderData * /*pRenderDa
       if (m_state == vcFTS_Exporting)
       {
         pProgramState->exportVideo = false;
-        system("./assets/bin/ffmpeg.exe -y -f image2 -framerate 60 -i ./_temp/%05d.png -c:v vp9 -b:v 1M output.avi");
-        udFindDir *pDir = nullptr;
-        udOpenDir(&pDir, "./_temp");
-        do
-        {
-          if (!pDir->isDirectory)
-            udFileDelete(udTempStr("./_temp/%s", pDir->pFilename));
-        } while (udReadDir(pDir) == udR_Success);
-        udCloseDir(&pDir);
+        //system("./assets/bin/ffmpeg.exe -y -f image2 -framerate 60 -i ./_temp/%05d.png -c:v vp9 -b:v 1M output.avi");
+        //udFindDir *pDir = nullptr;
+        //udOpenDir(&pDir, "./_temp");
+        //do
+        //{
+        //  if (!pDir->isDirectory)
+        //    udFileDelete(udTempStr("./_temp/%s", pDir->pFilename));
+        //} while (udReadDir(pDir) == udR_Success);
+        //udCloseDir(&pDir);
       }
 
       m_state = vcFTS_None;
